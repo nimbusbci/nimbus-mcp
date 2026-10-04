@@ -1,0 +1,68 @@
+name: Sync from PyPI release
+
+# The NimbusStudio monorepo owns releases (PyPI publish). This job watches
+# PyPI for new nimbus-mcp versions and mirrors them here, then tags — the tag
+# triggers publish-mcp.yml (official MCP Registry). The sdist carries
+# src/tests/pyproject/README/LICENSE/server.json/smithery.yaml/glama.json,
+# so no cross-repo tokens are needed.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check PyPI for a newer version
+        id: check
+        run: |
+          LATEST=$(curl -s https://pypi.org/pypi/nimbus-mcp/json | jq -r .info.version)
+          if git rev-parse -q --verify "refs/tags/v$LATEST" >/dev/null; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "PyPI latest v$LATEST already mirrored"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "version=$LATEST" >> "$GITHUB_OUTPUT"
+            echo "New version v$LATEST to mirror"
+          fi
+
+      - name: Download sdist
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          V=${{ steps.check.outputs.version }}
+          mkdir -p /tmp/sdist
+          curl -sL "https://pypi.org/pypi/nimbus-mcp/$V/json" \
+            | jq -r '.urls[] | select(.packagetype == "sdist") | .url' \
+            | xargs curl -sL -o /tmp/sdist/pkg.tar.gz
+          tar -xzf /tmp/sdist/pkg.tar.gz -C /tmp/sdist --strip-components=1
+
+      - name: Overlay release files
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          rsync -a --delete \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '.gitignore' \
+            /tmp/sdist/ ./
+          # keep registry workflows + gitignore from this repo
+
+      - name: Commit and tag
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          V=${{ steps.check.outputs.version }}
+          git config user.name "nimbus-release-bot"
+          git config user.email "hello@nimbusbci.com"
+          git add -A
+          git commit -m "release: v$V (synced from PyPI)" || { echo "no changes to commit"; exit 0; }
+          git tag "v$V"
+          git push origin main --tags

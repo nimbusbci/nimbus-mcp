@@ -1,0 +1,380 @@
+NIMBUS MCP SERVER — SOFTWARE LICENSE AGREEMENT
+
+Copyright (c) 2024–2026 Nimbus BCI Inc. All rights reserved.
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+This Software License Agreement ("Agreement") governs use of the Nimbus MCP
+Server ("nimbus-mcp"), including source code, documentation, and tooling
+(collectively, the "Software").
+
+The Software is **proprietary**. Nimbus BCI Inc. ("Nimbus BCI") retains all
+rights not expressly granted herein. Nothing in this Agreement transfers any
+ownership of intellectual property to you.
+
+This Agreement grants rights under **two tracks** that operate in parallel:
+
+  - **Section 3 — Non-Commercial License (No-Cost, Self-Executing).**
+    Available to anyone meeting the eligibility criteria, with no
+    registration, email, or license key required. Use, modification, and
+    non-commercial distribution are permitted for Non-Commercial Use.
+    Attribution is requested as a community norm (see Section 4) but is
+    not a condition of this license.
+
+  - **Section 5 — Commercial Licenses (Paid).**
+    Required for any use that is not a Non-Commercial Use. Contact
+    hello@nimbusbci.com to obtain a commercial license appropriate to your
+    use case.
+
+If you do not qualify under Section 3 and have not executed a separate
+written commercial license with Nimbus BCI under Section 5, you have no
+right to use the Software.
+
+================================================================================
+2. DEFINITIONS
+================================================================================
+
+  - **"Non-Commercial Use"** means use of the Software solely for:
+      (a) research, scholarship, or teaching conducted at, or under the
+          auspices of, an accredited academic institution, government
+          research laboratory, or recognized non-profit research
+          organization; OR
+      (b) personal learning, hobby, or scientific curiosity, where the
+          Software is not used, directly or indirectly, in or for the
+          benefit of a commercial product, service, or business activity.
+
+  - **"Non-Commercial Use"** does not include any activity that is funded
+    by, performed under contract for, or intended to produce revenue for a
+    commercial entity, including sponsored research with for-profit
+    sponsors, internal R&D inside a for-profit company, or product
+    development of any kind.
+
+  - **"Commercial Use"** means any use of the Software that is not a
+    Non-Commercial Use, including without limitation: use inside a
+    for-profit company; use in a paid product, service, or SaaS offering;
+    internal business operations; sponsored or fee-for-service research;
+    consulting; and inclusion in or bundling with a commercial product.
+
+  - **"Academic Publication"** means a peer-reviewed paper, preprint
+    (e.g., arXiv, bioRxiv), conference proceedings article, thesis, or
+    similar scholarly work publicly made available.
+
+  - **"Attribution"** means citing the Software in accordance with
+    Section 4.
+
+================================================================================
+3. NON-COMMERCIAL LICENSE (NO-COST, SELF-EXECUTING)
+================================================================================
+
+Subject to the terms of this Agreement, Nimbus BCI grants you a
+worldwide, no-cost, non-exclusive, non-transferable, revocable license
+to:
+
+  (a) install, copy, run, and modify the Software, and to make
+      derivative works of it, for Non-Commercial Use;
+
+  (b) reproduce, distribute, and publicly post the Software, in whole or in
+      part, and your derivative works, **solely for Non-Commercial Use and
+      solely at no charge**, provided that each copy or substantial portion
+      of the Software:
+        (i)   retains this LICENSE.txt file unchanged;
+        (ii)  includes all copyright, patent, trademark, and attribution
+              notices present in the Software; and
+        (iii) if it is a derivative work, prominently states that it is a
+              derivative of the Nimbus MCP Server and links to
+              https://nimbusbci.com.
+
+  Nothing in this Section 3 authorizes distribution for a fee, or any use
+  or distribution of the Software that is a Commercial Use.
+
+  This license is **self-executing**: no email, registration, license key,
+  or proof of affiliation is required to exercise it. Attribution in the
+  form of a citation is requested in Section 4 as a community norm, not as
+  a legal condition.
+
+  Non-commercial patent grant. To the extent that any Nimbus BCI-owned
+  patent claims are necessarily infringed by making, using, modifying, or
+  distributing the Software as permitted under this Section 3 solely for
+  Non-Commercial Use, Nimbus BCI grants you a non-exclusive, worldwide,
+  royalty-free, non-transferable, non-sublicensable patent license to do
+  so. This patent license does not cover (i) any modification of the
+  Software that is not permitted under this Section 3, (ii) any use of the
+  Software that is a Commercial Use, or (iii) any combination of the
+  Software with other software or hardware where the combination itself
+  necessarily infringes a Nimbus BCI patent claim that the Software alone
+  would not. If you institute patent litigation against Nimbus BCI (or a
+  cross-claim or counterclaim in a lawsuit) alleging that the Software, a
+  Nimbus BCI patent, or both directly or indirectly infringe any patent,
+  then any patent licenses granted to you under this Section 3 for the
+  Software terminate automatically as of the date the litigation is filed.
+
+================================================================================
+4. ATTRIBUTION AND CITATION (COMMUNITY NORM, NOT A LICENSE CONDITION)
+================================================================================
+
+Attribution is **not** a contractual condition of the Non-Commercial
+License in Section 3. You do not lose your license by omitting a
+citation. However, Nimbus BCI is a small team and the Software is
+provided at no cost for non-commercial use; **citation is how that work
+is recognized and is therefore strongly requested**, as follows:
+
+  (a) Citation in Academic Publications. If you write an Academic
+      Publication that uses the Software, reports results produced with
+      the Software, or is based on methods reached through the Software,
+      please cite it as: "Nimbus MCP Server, Nimbus BCI Inc.,
+      https://nimbusbci.com, version <version you used>".
+
+  (b) Notice in derivative artifacts. If you publicly distribute a
+      derivative work (e.g., a fork, a notebook collection, or artifacts
+      produced with the Software), please prominently state "Built with
+      the Nimbus MCP Server" and link to https://nimbusbci.com. (This is
+      required for distributions under Section 3(b)(iii) above; it is
+      requested, not required, for distributions you make under a separate
+      written commercial license.)
+
+  (c) Retention of notices. You must retain all copyright, patent,
+      trademark, and attribution notices present in the Software. This is
+      a condition of the license (Section 3(b)(ii)) and survives
+      independent of this Section 4.
+
+================================================================================
+5. COMMERCIAL LICENSES (PAID, SEPARATE AGREEMENT)
+================================================================================
+
+Any Commercial Use of the Software requires a separate written commercial
+license agreement with Nimbus BCI. Nimbus BCI's commercial tiers describe
+typical offerings; exact terms, fees, and scope are set in the applicable
+commercial agreement you sign.
+
+  TIER              TYPICAL USE CASE
+  --------------------------------------------------------------------------
+  Startup           Companies with less than US $1M annual revenue;
+                    single product; standard email support.
+  Commercial        Full production rights for commercial applications;
+                    unlimited products within the licensed organization;
+                    priority technical support.
+  Enterprise        Unlimited deployments across the organization; SLA
+                    guarantees; on-premise options; custom feature
+                    development; training and onboarding.
+
+To obtain a commercial license: hello@nimbusbci.com or
+https://nimbusbci.com/dashboard.
+
+================================================================================
+6. THINGS YOU MAY NOT DO
+================================================================================
+
+You may NOT:
+
+  1. Use the Software for any Commercial Use without an active commercial
+     license agreement under Section 5.
+
+  2. Sublicense, rent, lease, sell, resell, or otherwise distribute the
+     Software for a fee, in whole or in part. (Distributing the Software
+     or your derivative works at no charge for Non-Commercial Use is
+     permitted under Section 3; everything else requires a commercial
+     license.)
+
+  3. Remove, alter, or obscure any copyright, patent, trademark, or
+     attribution notices on or in the Software.
+
+  4. Institute patent litigation against Nimbus BCI alleging that the
+     Software or a Nimbus BCI patent infringes any patent (doing so
+     automatically terminates the patent license granted in Section 3, as
+     described there).
+
+  5. Use the Software in any manner that violates applicable laws or
+     regulations, including applicable export-control laws.
+
+  6. Use the Software for any life-critical, safety-critical, or
+     medical-diagnostic purpose without appropriate regulatory
+     clearances.
+
+  7. Share, publish, or expose any API keys, license keys, or
+     authentication credentials issued by Nimbus BCI.
+
+================================================================================
+7. INTELLECTUAL PROPERTY
+================================================================================
+
+The Software, including all code, designs, and implementations, is and
+remains the exclusive property of Nimbus BCI Inc. This Agreement does not
+transfer any ownership rights to you.
+
+================================================================================
+8. DATA PRIVACY
+================================================================================
+
+The Software runs locally on your systems and connects to Nimbus BCI
+services that you configure it to use. Nimbus BCI does not collect,
+store, or have access to your research data or subject data through the
+Software.
+
+The Software may transmit to Nimbus BCI servers the authentication
+requests necessary for the features you use (e.g., device-flow login),
+and software version/platform information for compatibility checks.
+
+================================================================================
+9. WARRANTY DISCLAIMER
+================================================================================
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+NIMBUS BCI DOES NOT WARRANT THAT:
+  - The Software will meet your specific requirements;
+  - The Software will be uninterrupted, timely, secure, or error-free;
+  - Any results obtained through the Software will be accurate or reliable;
+  - Any errors in the Software will be corrected.
+
+================================================================================
+10. MEDICAL DEVICE DISCLAIMER
+================================================================================
+
+IMPORTANT: THE SOFTWARE IS NOT A MEDICAL DEVICE.
+
+The Software has NOT been cleared or approved by the U.S. Food and Drug
+Administration (FDA), the European Medicines Agency (EMA), or any other
+regulatory body for use as a medical device.
+
+The Software is intended for RESEARCH AND DEVELOPMENT PURPOSES ONLY and
+must NOT be used for:
+  - Clinical diagnosis or treatment of patients;
+  - Medical decision-making or patient care;
+  - Any application where failure could result in death or personal
+    injury.
+
+================================================================================
+11. LIMITATION OF LIABILITY
+================================================================================
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW:
+
+IN NO EVENT SHALL NIMBUS BCI INC., ITS AFFILIATES, OFFICERS, DIRECTORS,
+EMPLOYEES, OR AGENTS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING WITHOUT LIMITATION LOSS OF
+PROFITS, REVENUE, OR BUSINESS OPPORTUNITIES; LOSS OF DATA OR RESEARCH
+RESULTS; BUSINESS INTERRUPTION; OR COST OF SUBSTITUTE GOODS OR SERVICES;
+WHETHER ARISING FROM CONTRACT, TORT, NEGLIGENCE, STRICT LIABILITY, OR ANY
+OTHER LEGAL THEORY, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+NIMBUS BCI'S TOTAL AGGREGATE LIABILITY SHALL NOT EXCEED:
+
+  - **For Non-Commercial Use (Section 3):** One Hundred U.S. Dollars
+    (US $100), consistent with the no-cost nature of that grant and with
+    the long-standing convention for free-of-charge software.
+
+  - **For Commercial Use (Section 5):** The total amount paid by you to
+    Nimbus BCI for the Software in the twelve (12) months preceding the
+    event giving rise to the claim, or such higher figure as is set out
+    in the written commercial agreement executed between you and Nimbus
+    BCI. If your commercial agreement specifies a different cap, that cap
+    controls and supersedes this Section.
+
+The foregoing caps apply even if a remedy fails of its essential purpose.
+
+================================================================================
+12. TERM AND TERMINATION
+================================================================================
+
+This license is effective until terminated. Nimbus BCI may terminate your
+license under this Agreement (whether the Non-Commercial License in
+Section 3 or a commercial license under Section 5) immediately if you
+breach any material term of this Agreement and, where the breach is
+curable, fail to cure it within thirty (30) days of written notice.
+Termination of the patent license under Section 3 occurs automatically
+upon the events specified in Section 3.
+
+Upon termination:
+  1. You must cease all use of the Software;
+  2. You must destroy all copies of the Software in your possession or
+     under your control, except that you may retain verbatim copies
+     strictly to support the reproducibility of an Academic Publication
+     already published, and except for archival copies you are required
+     to keep under applicable law; and
+  3. You must certify in writing, if requested, that you have complied.
+
+Termination does not affect the rights of any downstream recipient who
+received the Software (or a permitted derivative work) directly from you
+under Section 3 before the termination event, so long as that recipient
+remains in compliance with this Agreement.
+
+Sections 7 (Intellectual Property), 9 (Warranty Disclaimer), 10 (Medical
+Device Disclaimer), 11 (Limitation of Liability), and 13 (Governing Law)
+survive termination.
+
+================================================================================
+13. GOVERNING LAW AND JURISDICTION
+================================================================================
+
+This Agreement is governed by and construed in accordance with the laws
+of the State of Delaware, United States, without regard to its conflict
+of laws principles.
+
+Any disputes arising under this Agreement shall be resolved exclusively
+in the state or federal courts located in Delaware. You consent to the
+personal jurisdiction of those courts.
+
+================================================================================
+14. EXPORT COMPLIANCE
+================================================================================
+
+The Software may be subject to U.S. export control laws and regulations.
+You agree to comply with all applicable export laws and not to export or
+re-export the Software to any prohibited countries, entities, or persons.
+
+================================================================================
+15. ENTIRE AGREEMENT; AMENDMENT; NO RETROACTIVE REDUCTION
+================================================================================
+
+This Agreement is the entire agreement between you and Nimbus BCI
+regarding the Software and supersedes all prior agreements or
+communications regarding the Software.
+
+Nimbus BCI may amend this Agreement for future releases of the Software.
+The version of the Agreement that ships with the copy of the Software you
+obtained governs your use, unless you obtain a separate written
+commercial license that supersedes it.
+
+**No retroactive reduction.** Nimbus BCI will not, in any future version
+of this Agreement, reduce the Non-Commercial Use rights granted under
+Section 3 for any copy of the Software that you obtained under this
+version. Specifically:
+  - The right to install, copy, run, modify, and make derivative works
+    of the Software for Non-Commercial Use;
+  - The right to reproduce and distribute the Software and your
+    non-commercial derivative works at no charge, under the conditions
+    of Section 3;
+  - The non-commercial patent license described in Section 3;
+
+shall remain available to you for that copy of the Software under the
+terms of this version, even if a later version of this Agreement is more
+restrictive. This is a promise to the community on which the Software's
+adoption depends, and it survives any amendment.
+
+Nothing in this Section prevents Nimbus BCI from changing the license
+terms of *future* releases of the Software.
+
+================================================================================
+16. CONTACT
+================================================================================
+
+Nimbus BCI Inc.
+Email:   hello@nimbusbci.com
+Website: https://nimbusbci.com
+Studio:  https://studio.nimbusbci.com
+
+================================================================================
+
+By installing, copying, or otherwise using the Software, you acknowledge
+that you have read this Agreement, understand it, and agree to be bound by
+its terms.
+
+================================================================================
+Version: 2.1 (Nimbus MCP Server)
+Last Updated: October 2026
+
+© 2024–2026 Nimbus BCI Inc. All rights reserved.

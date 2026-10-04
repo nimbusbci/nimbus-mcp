@@ -1,0 +1,19 @@
+# Smithery configuration file: https://smithery.ai/docs
+# The server itself is zero-config when authenticated via `nimbus-mcp login`
+# (device-code flow); apiUrl only matters for local-desktop backends.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      apiUrl:
+        type: string
+        title: Nimbus backend URL
+        description: Hosted Nimbus Studio URL or a local backend (http://127.0.0.1:8080)
+        default: https://nimbus-studio.fly.dev
+    additionalProperties: false
+  command: uvx
+  args:
+    - nimbus-mcp
+  env:
+    NIMBUS_API_URL: "{{apiUrl}}"

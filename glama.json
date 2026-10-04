@@ -1,0 +1,10 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/connector.json",
+  "maintainers": [
+    {
+      "name": "Nimbus BCI",
+      "url": "https://nimbusbci.com",
+      "email": "hello@nimbusbci.com"
+    }
+  ]
+}

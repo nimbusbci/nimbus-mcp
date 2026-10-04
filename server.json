@@ -1,0 +1,58 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nimbusbci/nimbus-mcp",
+  "title": "Nimbus BCI",
+  "description": "AI agents build, train, and analyze BCI/EEG pipelines: data, models, experiments, live sessions.",
+  "version": "0.5.1",
+  "repository": {
+    "url": "https://github.com/nimbusbci/nimbus-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "nimbus-mcp",
+      "version": "0.5.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "NIMBUS_API_URL",
+          "description": "Nimbus backend URL. Defaults to the hosted Nimbus Studio (https://nimbus-studio.fly.dev); use http://127.0.0.1:8080 for a local backend or the desktop app.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "NIMBUS_TOKEN",
+          "description": "Hosted API token (nimb_…) minted in Nimbus Studio → Account → API tokens. Not needed if you already ran `nimbus-mcp login`.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NIMBUS_TOKEN_FILE",
+          "description": "Path to a 0600 JSON file {\"token\": \"…\"} holding a hosted API token (keeps secrets out of MCP configs).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "NIMBUS_MCP_KEY",
+          "description": "Local-backend key; must match MCP_LOCAL_KEY on your Nimbus backend (dev server) or the desktop app's key.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "NIMBUS_MCP_KEY_FILE",
+          "description": "Path to a local-backend key file. The desktop app's mcp-key.json is auto-discovered without this.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
