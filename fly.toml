@@ -1,0 +1,31 @@
+# Fly config for the hosted nimbus-mcp gateway (streamable HTTP).
+# Deploy: flyctl deploy --app nimbus-mcp --remote-only --depot=false
+app = "nimbus-mcp"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # The gateway proxies to the hosted Nimbus backend; per-user tokens arrive
+  # per request as X-Nimbus-Token / Authorization headers.
+  NIMBUS_API_URL = "https://nimbus-studio.fly.dev"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Cold-startable: a gateway serves occasional registry/client probes, and a
+  # few-second wake beats paying for an always-on machine.
+  auto_start_machines = true
+  auto_stop_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+  # No HTTP checks: the MCP gateway only exposes the streamable-HTTP endpoint
+  # at /mcp (fastmcp 4.x ships no health route); port-bind is the liveness
+  # signal for Fly.
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"

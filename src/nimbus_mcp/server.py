@@ -104,3 +104,17 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
 
 def main() -> None:
     build_server().run()  # stdio transport
+
+
+def serve(host: str = "0.0.0.0", port: int = 8080, path: str = "/mcp") -> None:
+    """Hosted gateway: streamable HTTP with per-request credentials.
+
+    ``serve`` never resolves a process credential — the
+    :class:`~nimbus_mcp.hosted.HeaderCredentialClient` reads each request's
+    ``X-Nimbus-Token`` header, so one shared deployment serves many users as
+    themselves (setup guidance for headerless calls).
+    """
+    from .hosted import HeaderCredentialClient
+
+    client = HeaderCredentialClient(load_config())
+    build_server(client).run(transport="http", host=host, port=port, path=path)

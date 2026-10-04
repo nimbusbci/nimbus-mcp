@@ -48,7 +48,7 @@ LOGIN_TIMEOUT_SLACK_SECONDS = 120
 
 _SECRET_PREFIX_LEN = 12
 
-_KNOWN_COMMANDS = ("login", "logout", "status")
+_KNOWN_COMMANDS = ("login", "logout", "status", "serve")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -67,7 +67,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cmd_login(args)
     if args.command == "logout":
         return cmd_logout(args)
+    if args.command == "serve":
+        return cmd_serve(args)
     return cmd_status(args)
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Streamable-HTTP gateway (see nimbus_mcp.server.serve)."""
+    from .server import serve as serve_server
+
+    serve_server(
+        host=args.host or os.environ.get("NIMBUS_MCP_HOST") or "0.0.0.0",
+        port=args.port or int(os.environ.get("NIMBUS_MCP_PORT") or 8080),
+        path=args.path or os.environ.get("NIMBUS_MCP_PATH") or "/mcp",
+    )
+    return 0
 
 
 def _poll_interval(value: Any, default: int) -> int:
@@ -92,8 +106,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     login = sub.add_parser("login", help="log in via the Nimbus Studio device flow")
     login.add_argument(
-        "--api-url", default=None, metavar="URL", help="backend to log in to (default: env "
-        "NIMBUS_API_URL, else http://127.0.0.1:8080)"
+        "--api-url",
+        default=None,
+        metavar="URL",
+        help="backend to log in to (default: env NIMBUS_API_URL, else http://127.0.0.1:8080)",
     )
     login.add_argument(
         "--ttl-days",
@@ -107,6 +123,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub.add_parser("logout", help="remove the stored credential")
     sub.add_parser("status", help="show credential source and probe the backend")
+    serve = sub.add_parser(
+        "serve",
+        help="run the MCP server over streamable HTTP (hosted gateway mode)",
+    )
+    serve.add_argument(
+        "--host",
+        default=None,
+        metavar="ADDR",
+        help="bind address (default: env NIMBUS_MCP_HOST, else 0.0.0.0)",
+    )
+    serve.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        metavar="N",
+        help="port (default: env NIMBUS_MCP_PORT, else 8080)",
+    )
+    serve.add_argument(
+        "--path",
+        default=None,
+        metavar="PATH",
+        help='HTTP path (default: env NIMBUS_MCP_PATH, else "/mcp")',
+    )
     return parser
 
 
@@ -122,9 +161,7 @@ def _sleep(seconds: float) -> None:
 
 def cmd_login(args: argparse.Namespace, transport: httpx.BaseTransport | None = None) -> int:
     """Run the device-code flow and store the minted token."""
-    api_url = (
-        args.api_url or os.environ.get("NIMBUS_API_URL") or DEFAULT_API_URL
-    ).rstrip("/")
+    api_url = (args.api_url or os.environ.get("NIMBUS_API_URL") or DEFAULT_API_URL).rstrip("/")
     if args.ttl_days is not None and not (TTL_DAYS_MIN <= args.ttl_days <= TTL_DAYS_MAX):
         print(f"--ttl-days must be {TTL_DAYS_MIN}..{TTL_DAYS_MAX}, got {args.ttl_days}.")
         return 1

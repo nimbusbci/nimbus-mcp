@@ -14,7 +14,7 @@ Nimbus backend **or the hosted deployment, with one `nimbus-mcp login`**.
 pip install nimbus-mcp   # or: uvx nimbus-mcp
 ```
 
-(Also installable from source: `pip install -e .`)
+(Also installable from the repo: `pip install -e nimbus-studio/mcp`.)
 
 ## Authentication
 
@@ -145,6 +145,36 @@ unset), `NIMBUS_EXPORT_DIR` (default `~/nimbus-exports`). With none of the
 token/key vars set, the login store and then the desktop key file are
 auto-discovered; with nothing found, the server runs in setup mode (every tool
 returns onboarding guidance).
+
+## Hosted gateway (streamable HTTP)
+
+`nimbus-mcp serve` runs the same 32 tools over streamable HTTP instead of
+stdio — for remote MCP clients, registries (Smithery lists URL-based
+servers), and browser-side clients:
+
+```bash
+nimbus-mcp serve --host 0.0.0.0 --port 8080   # env: NIMBUS_MCP_HOST/PORT/PATH
+```
+
+The gateway holds **no** credential itself: each request's Nimbus API token
+arrives as a header, so one shared deployment serves many users as
+themselves. Calls without a header get setup guidance (add the header, or
+install locally via `uvx`).
+
+```json
+{
+  "mcpServers": {
+    "nimbus": {
+      "type": "http",
+      "url": "https://nimbus-mcp.fly.dev/mcp",
+      "headers": { "X-Nimbus-Token": "nimb_…  (Account → API tokens)" }
+    }
+  }
+}
+```
+
+(A gateway started with `NIMBUS_TOKEN` in the environment uses it as the
+fallback for headerless calls — single-tenant self-hosting.)
 
 ## Claude Code
 
