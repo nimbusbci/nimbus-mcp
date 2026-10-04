@@ -2,6 +2,8 @@
 
 <!-- mcp-name: io.github.nimbusbci/nimbus-mcp -->
 
+[![smithery badge](https://smithery.ai/badge/nimbusbci/nimbus-mcp)](https://smithery.ai/servers/nimbusbci/nimbus-mcp)
+
 MCP server that lets AI agents (Claude Code, Cursor, Claude Desktop) build, validate,
 run, and analyze Nimbus BCI pipelines — upload their own EEG data, persist pipelines
 into studio projects, run multi-configuration experiment campaigns, watch live EEG
