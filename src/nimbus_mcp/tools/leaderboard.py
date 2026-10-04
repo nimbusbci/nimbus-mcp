@@ -7,10 +7,11 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import NimbusClient
+from ._annotations import READ_ONLY
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def get_leaderboard() -> dict[str, Any]:
         """Public benchmark leaderboard: pipeline rankings per dataset.
 

@@ -7,11 +7,12 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import NimbusClient
+from ._annotations import READ_ONLY
 from ._guards import safe_segment
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def get_live_session(session_id: str, window: int = 50) -> dict[str, Any]:
         """Live snapshot of a streaming session: latest prediction + recent window,
         signal quality (meanChannelQuality, snrDb, artifactProbability), indicators,
@@ -21,7 +22,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         confidence during filter/ASR warm-up (first seconds); quality < 0.5 or high
         artifactProbability means the signal is poor. 404 => session not active in
         this backend. Each poll also feeds the idle watchdog (see start_stream's
-        idle_timeout_sec), keeping an actively watched session alive."""
+        idle_timeout_sec), keeping an actively watched session alive.
+
+        Args:
+            session_id: The streaming session to read telemetry for.
+            window: How many recent predictions/chunks to include (default 50).
+        """
         sess = safe_segment(session_id, label="session id")
         from . import activity
 

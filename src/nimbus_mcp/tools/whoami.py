@@ -11,6 +11,7 @@ from fastmcp import FastMCP
 
 from ..client import NimbusClient
 from ..credentials import decode_token_claims
+from ._annotations import READ_ONLY
 
 
 def _token_info(client: NimbusClient) -> dict[str, Any] | None:
@@ -37,7 +38,7 @@ def _token_info(client: NimbusClient) -> dict[str, Any] | None:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def whoami() -> dict[str, Any]:
         """Who you are authenticated as: account email, plan (isPro / pioneer),
         this month's free-run quota, and — with a hosted token — the token name

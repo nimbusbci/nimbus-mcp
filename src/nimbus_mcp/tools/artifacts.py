@@ -8,6 +8,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import NimbusClient
+from ._annotations import READ_ONLY
 from ._guards import safe_segment
 
 
@@ -17,9 +18,13 @@ def _safe_name(name: str) -> str:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def list_artifacts(execution_id: str) -> dict[str, Any]:
-        """Trained artifacts (models/filters, e.g. *.pkl) saved by an execution."""
+        """Trained artifacts (models/filters, e.g. *.pkl) saved by an execution.
+
+        Args:
+            execution_id: Run whose artifacts to list.
+        """
         exec_id = safe_segment(execution_id)
         payload = client.get(f"/api/executions/{exec_id}/artifacts")
         return {
@@ -30,9 +35,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             ],
         }
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def download_artifact(execution_id: str, artifact_name: str) -> dict[str, Any]:
-        """Download one artifact file to NIMBUS_EXPORT_DIR/executions/<id>/ and return its path."""
+        """Download one artifact file to NIMBUS_EXPORT_DIR/executions/<id>/ and return its path.
+
+        Args:
+            execution_id: Run that produced the artifact.
+            artifact_name: File name from list_artifacts (e.g. "nimbus_lda.pkl").
+        """
         exec_id = safe_segment(execution_id)
         artifact = _safe_name(artifact_name)
         data = client.get_bytes(f"/api/executions/{exec_id}/artifacts/{artifact}")
@@ -42,9 +52,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         dest.write_bytes(data)
         return {"path": str(dest), "size": len(data)}
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def export_python(train_graph: dict[str, Any], name: str | None = None) -> dict[str, Any]:
-        """Export the pipeline as a standalone runnable Python bundle (zip saved locally)."""
+        """Export the pipeline as a standalone runnable Python bundle (zip saved locally).
+
+        Args:
+            train_graph: Pipeline graph {nodes, connections} to export.
+            name: Optional name recorded inside the bundle.
+        """
         body: dict[str, Any] = {"train": train_graph}
         if name is not None:
             body["name"] = name

@@ -10,6 +10,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
+from ._annotations import MUTATING
 
 _USAGE = (
     "Use this path as a custom_data node's filePath in run_pipeline/validate_pipeline "
@@ -18,7 +19,7 @@ _USAGE = (
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=MUTATING)
     def upload_data(
         file_path: str,
         dataset_name: str | None = None,
@@ -32,6 +33,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         without embedded metadata — the backend silently assumes 250 Hz otherwise,
         which mis-times epochs, filters and spectral features. format overrides
         extension-based detection (auto, mat, csv, tsv, txt, edf, bdf, h5, hdf5).
+
+        Args:
+            file_path: Local file to upload (.edf/.bdf/.mat/.csv/.txt/.tsv/.h5/.hdf5, <=500MB).
+            dataset_name: Optional label for the uploaded dataset.
+            sampling_rate: Hz for headerless CSV/TSV/TXT (REQUIRED there, e.g. 250.0).
+            format: Override extension-based detection (auto|mat|csv|tsv|txt|edf|bdf|h5|hdf5).
         """
         path = Path(file_path).expanduser()
         if not path.is_file():

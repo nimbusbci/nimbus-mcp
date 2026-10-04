@@ -21,6 +21,7 @@ from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
 from ..setup_mode import SetupRequired
+from ._annotations import MUTATING, READ_ONLY
 from ._guards import safe_segment
 from .run import _METRIC_KEYS, synth_layout
 
@@ -243,13 +244,19 @@ def _experiment_worker(state: ExperimentState, client: NimbusClient) -> None:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=MUTATING)
     def run_experiment(runs: list[dict[str, Any]], max_concurrent: int = 2) -> dict[str, Any]:
         """Run 1-25 pipelines as ONE paced experiment (NON-BLOCKING). Returns an
         experimentId immediately; a background thread submits at most 2 runs at
         a time (min(max_concurrent, 2)), retries queue-full up to 3 times per
         run, and polls each execution to completion. Poll get_experiment() for
-        per-run status and, once finished, aggregated metrics."""
+        per-run status and, once finished, aggregated metrics.
+
+        Args:
+            runs: 1-25 entries, each {name: str, train_graph: {nodes, connections}}
+                (same graph shape as run_pipeline's train_graph).
+            max_concurrent: Parallel submissions cap, clamped to 1-2 (default 2).
+        """
         # Preflight BEFORE registering state or spawning the worker thread:
         # in setup mode the worker's catch-all would swallow SetupRequired
         # into per-run errors and the tool would answer a misleading
@@ -296,12 +303,16 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "until status is completed or failed.",
         }
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def get_experiment(experiment_id: str) -> dict[str, Any]:
         """Experiment snapshot: status (running/completed/failed), per-run rows
         ({name, executionId, status, error?, metrics?}) and, once finished,
         aggregates {metric: {mean, std, best: {name, value}}} over completed
-        runs only (std = population; None below 2 values)."""
+        runs only (std = population; None below 2 values).
+
+        Args:
+            experiment_id: The experiment to inspect (from run_experiment).
+        """
         # Symmetry with run_experiment: in setup mode no experiment can exist
         # (its preflight refuses), so answer with guidance rather than the
         # confusing "Unknown experiment".

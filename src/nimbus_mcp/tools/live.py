@@ -11,6 +11,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import NimbusClient
+from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
 from ._guards import safe_segment
 
 _DEVICE_FIELDS = (
@@ -59,12 +60,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "disconnectWarning": disconnect_warning,
         }
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def list_devices() -> dict[str, Any]:
         """EEG devices supported by this backend (OpenBCI, Muse, BrainBit, LSL, PiEEG...)."""
         return client.get("/api/deployment/devices")
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def test_device(
         device_type: str,
         connection_type: str | None = None,
@@ -76,7 +77,19 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         mac_address: str | None = None,
         serial_number: str | None = None,
     ) -> dict[str, Any]:
-        """Test a device connection WITHOUT starting a stream (safe, no confirm needed)."""
+        """Test a device connection WITHOUT starting a stream (safe, no confirm needed).
+
+        Args:
+            device_type: Device id from list_devices (e.g. "brainbit", "muse").
+            connection_type: Device-specific selector when several exist (e.g. serial vs wifi).
+            port: Serial/COM port for wired devices.
+            ip_address: Device IP for network/wifi devices.
+            ip_port: Port for network devices.
+            stream_name: LSL stream name (LSL devices).
+            source_id: LSL source id.
+            mac_address: Bluetooth MAC (BT devices).
+            serial_number: Device serial (some BLE stacks).
+        """
         values = {
             "connection_type": connection_type, "port": port, "ip_address": ip_address,
             "ip_port": ip_port, "stream_name": stream_name, "source_id": source_id,
@@ -84,7 +97,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         }
         return client.post("/api/deployment/test-device", json=_device_body(device_type, values))
 
-    @mcp.tool
+    @mcp.tool(annotations=MUTATING)
     def start_stream(
         device_type: str,
         confirm: bool = False,
@@ -107,7 +120,26 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         idle_timeout_sec (default 900), the session is stopped and the device
         disconnected automatically — an abandoned stream never keeps running on
         the user's head. Any poll resets the timer; idle_timeout_sec=0 disables
-        the watchdog."""
+        the watchdog.
+
+        Args:
+            device_type: Device id from list_devices (e.g. "brainbit").
+            confirm: MUST be true to start — the explicit user go-ahead for a live
+                session on their head; anything else is refused with zero requests.
+            session_id: Optional existing session to resume/reuse.
+            chunk_size: Samples per streamed chunk (default 125).
+            n_channels: Channel count to open (default 8).
+            connection_type: Device-specific selector (e.g. serial vs wifi).
+            port: Serial/COM port for wired devices.
+            ip_address: Device IP for network/wifi devices.
+            ip_port: Port for network devices.
+            stream_name: LSL stream name (LSL devices).
+            source_id: LSL source id.
+            mac_address: Bluetooth MAC (BT devices).
+            serial_number: Device serial (some BLE stacks).
+            idle_timeout_sec: Watchdog: stop+disconnect after this many seconds
+                without a status poll (default 900; 0 disables).
+        """
         if not confirm:
             return {
                 "started": False,
@@ -153,11 +185,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "have no telemetry — use stream_status for those.",
         }
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def stream_status(session_id: str) -> dict[str, Any]:
         """Live snapshot of a streaming session (running, deviceConnected).
         Polling this also feeds the idle watchdog: each call resets the
-        session's idle timer (see start_stream's idle_timeout_sec)."""
+        session's idle timer (see start_stream's idle_timeout_sec).
+
+        Args:
+            session_id: The streaming session to inspect.
+        """
         # session_id is interpolated into a query param — validate before the request.
         sess_id = safe_segment(session_id, label="session id")
         from . import activity
@@ -167,11 +203,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "/api/hardware/stream-status", params={"sessionId": sess_id}
         )
 
-    @mcp.tool
+    @mcp.tool(annotations=DESTRUCTIVE)
     def stop_stream(session_id: str) -> dict[str, Any]:
         """Stop a streaming session and disconnect the device (always safe to call).
         Also removes the session from the idle watchdog so it cannot fire after
-        an explicit stop."""
+        an explicit stop.
+
+        Args:
+            session_id: The streaming session to stop.
+        """
         sess_id = safe_segment(session_id, label="session id")
         from . import activity
 

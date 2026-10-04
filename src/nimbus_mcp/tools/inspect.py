@@ -15,6 +15,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
+from ._annotations import READ_ONLY
 
 # Backend error code for "local paths are not trusted on this deployment"
 # (api_codes.DATA_DESCRIBE_LOCAL_FORBIDDEN): flat RFC7807 body, top-level code.
@@ -46,7 +47,7 @@ _HOSTED_LOCAL_OPTIONS: list[dict[str, str]] = [
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def inspect_dataset(
         dataset: str,
         subject: str | None = None,
@@ -65,13 +66,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Units note: values are ASSUMED volts by the loader — a µV-native file
         reads 1e6x too large; set unitsScale in a pipeline's custom_data
         config when needed.
+
+        Args:
+            dataset: Dataset id from list_datasets (e.g. "BNCI2014_001").
+            subject: REQUIRED subject code ("S01") or comma-list cohort ("S01,S03").
+            mode: Which split to summarize — training | evaluation | all.
         """
         params: dict[str, Any] = {"source": "dataset", "dataset": dataset, "mode": mode}
         if subject is not None:
             params["subject"] = subject
         return client.get("/api/data/describe", params=params)
 
-    @mcp.tool
+    @mcp.tool(annotations=READ_ONLY)
     def inspect_file(path: str) -> dict[str, Any]:
         """Exploratory summary of an EEG file (.edf/.bdf/.mat/.csv/.tsv/.txt/.h5):
         channels, sampling rate, trial/class balance, per-channel µV stats,
@@ -89,6 +95,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         set unitsScale in a pipeline's custom_data config when needed. On a
         hosted backend absolute paths are refused and this returns guidance
         (upload the file first or switch to a local backend).
+
+        Args:
+            path: ABSOLUTE filesystem path (local backends only) or the RELATIVE
+                upload path returned by upload_data (works on any backend).
         """
         source = "local" if os.path.isabs(os.path.expanduser(path)) else "upload"
         try:

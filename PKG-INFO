@@ -1,6 +1,6 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.6.0
+Version: 0.6.1
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
@@ -402,6 +402,8 @@ Description-Content-Type: text/markdown
 # nimbus-mcp
 
 <!-- mcp-name: io.github.nimbusbci/nimbus-mcp -->
+
+[![smithery badge](https://smithery.ai/badge/nimbusbci/nimbus-mcp)](https://smithery.ai/servers/nimbusbci/nimbus-mcp)
 
 MCP server that lets AI agents (Claude Code, Cursor, Claude Desktop) build, validate,
 run, and analyze Nimbus BCI pipelines — upload their own EEG data, persist pipelines
