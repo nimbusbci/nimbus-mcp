@@ -7,6 +7,12 @@ name: Publish to MCP Registry
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (default: latest tag)"
+        required: false
+        default: ""
 
 permissions:
   id-token: write
@@ -18,6 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # git describe needs tags for the dispatch fallback
 
       - name: Install mcp-publisher
         run: |
@@ -25,7 +33,9 @@ jobs:
 
       - name: Sync server.json version with tag
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION="${{ inputs.version }}"
+          [ -n "$VERSION" ] || VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
+          echo "publishing $VERSION"
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
 
       - name: Validate

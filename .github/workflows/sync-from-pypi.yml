@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # MCP Registry OIDC publish (inline)
 
 jobs:
   sync:
@@ -66,3 +67,29 @@ jobs:
           git commit -m "release: v$V (synced from PyPI)" || { echo "no changes to commit"; exit 0; }
           git tag "v$V"
           git push origin main --tags
+
+      # A GITHUB_TOKEN tag push does NOT trigger publish-mcp.yml (GitHub never
+      # fires workflows from GITHUB_TOKEN push events), so the registry
+      # publish runs inline here, in the same job that owns the OIDC identity.
+      - name: Install mcp-publisher
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Sync server.json version with tag
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          V=${{ steps.check.outputs.version }}
+          jq --arg v "$V" '.version = $v | .packages[0].version = $v' server.json > server.tmp && mv server.tmp server.json
+
+      - name: Validate
+        if: steps.check.outputs.up_to_date == 'false'
+        run: ./mcp-publisher validate
+
+      - name: Authenticate to MCP Registry
+        if: steps.check.outputs.up_to_date == 'false'
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        if: steps.check.outputs.up_to_date == 'false'
+        run: ./mcp-publisher publish
