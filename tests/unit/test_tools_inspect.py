@@ -1,4 +1,4 @@
-"""inspect_dataset / inspect_file — passthrough, params, source pick, 403 guidance."""
+"""data.inspect_dataset / data.inspect_file — passthrough, params, source pick, 403 guidance."""
 
 from pathlib import Path
 
@@ -40,7 +40,7 @@ def make_server(handler) -> FastMCP:
     return server
 
 
-# ── inspect_dataset ──────────────────────────────────────────────────────────
+# ── data.inspect_dataset ──────────────────────────────────────────────────────────
 
 
 async def test_inspect_dataset_passes_payload_through_and_encodes_params():
@@ -53,7 +53,8 @@ async def test_inspect_dataset_passes_payload_through_and_encodes_params():
 
     async with Client(make_server(handler)) as c:
         result = await c.call_tool(
-            "inspect_dataset", {"dataset": "BNCI2014_001", "subject": "S01", "mode": "training"}
+            "data.inspect_dataset",
+            {"dataset": "BNCI2014_001", "subject": "S01", "mode": "training"},
         )
     assert seen["path"] == "/api/data/describe"
     assert seen["params"] == {
@@ -84,7 +85,7 @@ async def test_inspect_dataset_defaults_mode_all_and_omits_missing_subject():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="requires both dataset and subject"):
-            await c.call_tool("inspect_dataset", {"dataset": "BNCI2014_001"})
+            await c.call_tool("data.inspect_dataset", {"dataset": "BNCI2014_001"})
     assert seen["params"] == {"source": "dataset", "dataset": "BNCI2014_001", "mode": "all"}
 
 
@@ -96,11 +97,11 @@ async def test_inspect_dataset_accepts_comma_cohort_subject():
         return httpx.Response(200, json={**_DESCRIBE_PAYLOAD, "source": "dataset"})
 
     async with Client(make_server(handler)) as c:
-        await c.call_tool("inspect_dataset", {"dataset": "BNCI2014_001", "subject": "S01,S03"})
+        await c.call_tool("data.inspect_dataset", {"dataset": "BNCI2014_001", "subject": "S01,S03"})
     assert seen["params"]["subject"] == "S01,S03"
 
 
-# ── inspect_file ─────────────────────────────────────────────────────────────
+# ── data.inspect_file ─────────────────────────────────────────────────────────────
 
 
 async def test_inspect_file_absolute_path_uses_local_source():
@@ -114,7 +115,9 @@ async def test_inspect_file_absolute_path_uses_local_source():
         return httpx.Response(200, json={**_DESCRIBE_PAYLOAD, "source": "local"})
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("inspect_file", {"path": "/Users/you/recordings/session-01.edf"})
+        result = await c.call_tool(
+            "data.inspect_file", {"path": "/Users/you/recordings/session-01.edf"}
+        )
     assert seen["path"] == "/api/data/describe"
     assert seen["params"] == {
         "source": "local",
@@ -124,7 +127,7 @@ async def test_inspect_file_absolute_path_uses_local_source():
 
 
 async def test_inspect_file_relative_path_uses_upload_source():
-    """Relative paths (as upload_data returns them) resolve via the ownership
+    """Relative paths (as data.upload returns them) resolve via the ownership
     table on ANY backend — the tool must send source=upload, not local."""
     seen = {}
 
@@ -133,7 +136,7 @@ async def test_inspect_file_relative_path_uses_upload_source():
         return httpx.Response(200, json={**_DESCRIBE_PAYLOAD, "source": "upload"})
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("inspect_file", {"path": "uploads/usr1/session-01.edf"})
+        result = await c.call_tool("data.inspect_file", {"path": "uploads/usr1/session-01.edf"})
     assert seen["params"] == {
         "source": "upload",
         "path": "uploads/usr1/session-01.edf",
@@ -155,14 +158,14 @@ async def test_inspect_file_hosted_403_local_forbidden_returns_guidance():
                 "detail": (
                     "Local file inspection is only available on a local backend "
                     "(desktop / MCP local mode). Upload the file first (e.g. via "
-                    "upload_data), or run against a local backend."
+                    "data.upload), or run against a local backend."
                 ),
                 "code": "nimbus.data.describe_local_forbidden",
             },
         )
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("inspect_file", {"path": "/abs/eeg.csv"})
+        result = await c.call_tool("data.inspect_file", {"path": "/abs/eeg.csv"})
     data = result.data
     assert data["ok"] is False
     assert "local backend" in data["message"]
@@ -190,7 +193,7 @@ async def test_inspect_file_relative_path_local_forbidden_still_raises():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="local backend"):
-            await c.call_tool("inspect_file", {"path": "uploads/usr1/eeg.csv"})
+            await c.call_tool("data.inspect_file", {"path": "uploads/usr1/eeg.csv"})
 
 
 async def test_inspect_file_other_403_still_raises():
@@ -207,7 +210,7 @@ async def test_inspect_file_other_403_still_raises():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="quota exceeded"):
-            await c.call_tool("inspect_file", {"path": "/abs/eeg.csv"})
+            await c.call_tool("data.inspect_file", {"path": "/abs/eeg.csv"})
 
 
 async def test_inspect_file_404_raises_normally():
@@ -222,4 +225,4 @@ async def test_inspect_file_404_raises_normally():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="not found"):
-            await c.call_tool("inspect_file", {"path": "/abs/eeg.csv"})
+            await c.call_tool("data.inspect_file", {"path": "/abs/eeg.csv"})

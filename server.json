@@ -3,7 +3,7 @@
   "name": "io.github.nimbusbci/nimbus-mcp",
   "title": "Nimbus BCI",
   "description": "AI agents build, train, and analyze BCI/EEG pipelines: data, models, experiments, live sessions.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "repository": {
     "url": "https://github.com/nimbusbci/nimbus-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "nimbus-mcp",
-      "version": "0.6.1",
+      "version": "0.7.0",
       "transport": {
         "type": "stdio"
       },

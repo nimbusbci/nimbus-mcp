@@ -294,9 +294,7 @@ def test_status_token_healthy(capsys):
         seen.append((request.url.path, request.headers.get("authorization")))
         return httpx.Response(200, json=_profile_response())
 
-    rc = cli.cmd_status(
-        _args(command="status"), transport=httpx.MockTransport(handler), cred=cred
-    )
+    rc = cli.cmd_status(_args(command="status"), transport=httpx.MockTransport(handler), cred=cred)
     assert rc == 0
     assert seen == [("/api/me/profile", f"Bearer {cred.secret}")]
     out = capsys.readouterr().out
@@ -350,9 +348,7 @@ def test_status_desktop_key_probes_health(capsys):
         seen.append(request.url.path)
         return httpx.Response(200, json={"status": "ok"})
 
-    rc = cli.cmd_status(
-        _args(command="status"), transport=httpx.MockTransport(handler), cred=cred
-    )
+    rc = cli.cmd_status(_args(command="status"), transport=httpx.MockTransport(handler), cred=cred)
     assert rc == 0
     assert seen == ["/health"]
     out = capsys.readouterr().out
@@ -495,7 +491,9 @@ def test_login_create_interval_also_guarded(monkeypatch):
 def test_status_profile_malformed_json_body_guarded(capsys):
     """A 200 with a non-JSON body must not traceback; exit 1 with a hint."""
     cred = ResolvedCredential(
-        "token", "http://api.test", _fake_jwt_token({"exp": int(time.time()) + 86400}),
+        "token",
+        "http://api.test",
+        _fake_jwt_token({"exp": int(time.time()) + 86400}),
         {"source": "store"},
     )
     rc = cli.cmd_status(

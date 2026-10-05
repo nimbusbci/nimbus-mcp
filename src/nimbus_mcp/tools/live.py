@@ -1,6 +1,6 @@
 """Live tools: device discovery/testing and gated streaming control.
 
-start_stream requires an explicit confirm=True — it connects an EEG device and
+stream.start requires an explicit confirm=True — it connects an EEG device and
 starts a live streaming session on the user's head.
 """
 
@@ -48,7 +48,7 @@ def _device_body(device_type: str, values: dict[str, Any]) -> dict[str, Any]:
 def register(mcp: FastMCP, client: NimbusClient) -> None:
     def _stop_chain(sess_id: str) -> dict[str, Any]:
         """stop-stream then best-effort disconnect — the single stop sequence
-        shared by the stop_stream tool and the idle-timeout watchdog."""
+        shared by the stream.stop tool and the idle-timeout watchdog."""
         stopped = client.post("/api/hardware/stop-stream", json={"sessionId": sess_id})
         disconnect_warning = None
         try:
@@ -60,12 +60,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "disconnectWarning": disconnect_warning,
         }
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="device.list", annotations=READ_ONLY)
     def list_devices() -> dict[str, Any]:
         """EEG devices supported by this backend (OpenBCI, Muse, BrainBit, LSL, PiEEG...)."""
         return client.get("/api/deployment/devices")
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="device.test", annotations=READ_ONLY)
     def test_device(
         device_type: str,
         connection_type: str | None = None,
@@ -80,7 +80,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """Test a device connection WITHOUT starting a stream (safe, no confirm needed).
 
         Args:
-            device_type: Device id from list_devices (e.g. "brainbit", "muse").
+            device_type: Device id from device.list (e.g. "brainbit", "muse").
             connection_type: Device-specific selector when several exist (e.g. serial vs wifi).
             port: Serial/COM port for wired devices.
             ip_address: Device IP for network/wifi devices.
@@ -91,13 +91,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             serial_number: Device serial (some BLE stacks).
         """
         values = {
-            "connection_type": connection_type, "port": port, "ip_address": ip_address,
-            "ip_port": ip_port, "stream_name": stream_name, "source_id": source_id,
-            "mac_address": mac_address, "serial_number": serial_number,
+            "connection_type": connection_type,
+            "port": port,
+            "ip_address": ip_address,
+            "ip_port": ip_port,
+            "stream_name": stream_name,
+            "source_id": source_id,
+            "mac_address": mac_address,
+            "serial_number": serial_number,
         }
         return client.post("/api/deployment/test-device", json=_device_body(device_type, values))
 
-    @mcp.tool(annotations=MUTATING)
+    @mcp.tool(name="stream.start", annotations=MUTATING)
     def start_stream(
         device_type: str,
         confirm: bool = False,
@@ -115,15 +120,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         idle_timeout_sec: int = 900,
     ) -> dict[str, Any]:
         """Connect an EEG device and START a live streaming session on the user's head.
-        Requires confirm=True; call test_device first. Track with stream_status().
-        Idle watchdog: if no stream_status()/get_live_session() poll happens for
+        Requires confirm=True; call device.test first. Track with stream.status().
+        Idle watchdog: if no stream.status()/stream.telemetry() poll happens for
         idle_timeout_sec (default 900), the session is stopped and the device
         disconnected automatically — an abandoned stream never keeps running on
         the user's head. Any poll resets the timer; idle_timeout_sec=0 disables
         the watchdog.
 
         Args:
-            device_type: Device id from list_devices (e.g. "brainbit").
+            device_type: Device id from device.list (e.g. "brainbit").
             confirm: MUST be true to start — the explicit user go-ahead for a live
                 session on their head; anything else is refused with zero requests.
             session_id: Optional existing session to resume/reuse.
@@ -144,16 +149,21 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             return {
                 "started": False,
                 "message": "Refusing to start a live session: pass confirm=true to proceed. "
-                "Call test_device(device_type=...) first to check the connection.",
+                "Call device.test(device_type=...) first to check the connection.",
             }
         # After the confirm check (so the refusal stays zero-HTTP) and before any request:
         # session_id is interpolated into request bodies downstream.
         if session_id is not None:
             session_id = safe_segment(session_id, label="session id")
         values = {
-            "connection_type": connection_type, "port": port, "ip_address": ip_address,
-            "ip_port": ip_port, "stream_name": stream_name, "source_id": source_id,
-            "mac_address": mac_address, "serial_number": serial_number,
+            "connection_type": connection_type,
+            "port": port,
+            "ip_address": ip_address,
+            "ip_port": ip_port,
+            "stream_name": stream_name,
+            "source_id": source_id,
+            "mac_address": mac_address,
+            "serial_number": serial_number,
         }
         body = _device_body(device_type, values)
         if session_id is not None:
@@ -179,17 +189,17 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "deviceType": connect.get("deviceType"),
             "channels": connect.get("channels"),
             "updateRateHz": started.get("updateRateHz"),
-            "hint": "Poll stream_status(session_id); stop with stop_stream(session_id). "
-            "Live telemetry (get_live_session) requires a DEPLOYED model session "
+            "hint": "Poll stream.status(session_id); stop with stream.stop(session_id). "
+            "Live telemetry (stream.telemetry) requires a DEPLOYED model session "
             "(hub deploy / playback with a classifier); modelless hardware streams "
-            "have no telemetry — use stream_status for those.",
+            "have no telemetry — use stream.status for those.",
         }
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="stream.status", annotations=READ_ONLY)
     def stream_status(session_id: str) -> dict[str, Any]:
         """Live snapshot of a streaming session (running, deviceConnected).
         Polling this also feeds the idle watchdog: each call resets the
-        session's idle timer (see start_stream's idle_timeout_sec).
+        session's idle timer (see stream.start's idle_timeout_sec).
 
         Args:
             session_id: The streaming session to inspect.
@@ -199,11 +209,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         from . import activity
 
         activity.note_activity(sess_id)
-        return client.get(
-            "/api/hardware/stream-status", params={"sessionId": sess_id}
-        )
+        return client.get("/api/hardware/stream-status", params={"sessionId": sess_id})
 
-    @mcp.tool(annotations=DESTRUCTIVE)
+    @mcp.tool(name="stream.stop", annotations=DESTRUCTIVE)
     def stop_stream(session_id: str) -> dict[str, Any]:
         """Stop a streaming session and disconnect the device (always safe to call).
         Also removes the session from the idle watchdog so it cannot fire after

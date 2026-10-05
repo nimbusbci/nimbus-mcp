@@ -26,7 +26,7 @@ def test_get_returns_json():
 
 def test_ensure_ready_is_noop_with_credentials():
     """A real client always has credentials attached: the preflight hook (used
-    by run_experiment/get_experiment before spawning background work) must not
+    by experiment.run/experiment.get before spawning background work) must not
     raise and must not touch HTTP."""
     c = make_client(lambda req: pytest.fail("ensure_ready must not touch HTTP"))
     assert c.ensure_ready() is None
@@ -102,9 +102,7 @@ def test_403_surfaces_backend_detail_not_auth_hint():
     """403 is a policy denial (e.g. freemium limits), not a rejected key —
     the backend's detail must surface instead of the MCP-key hint."""
     c = make_client(
-        lambda req: httpx.Response(
-            403, json={"detail": "This action requires a Pro subscription."}
-        )
+        lambda req: httpx.Response(403, json={"detail": "This action requires a Pro subscription."})
     )
     with pytest.raises(McpToolError, match="requires a Pro subscription") as excinfo:
         c.post("/api/execute", json={})
@@ -171,7 +169,9 @@ def test_put_returns_conflict_payload_instead_of_raising_on_409():
         )
     )
     assert c.put("/api/projects/p1/doc", json={}) == {
-        "ok": False, "code": "nimbus.project.doc_conflict", "status": 409,
+        "ok": False,
+        "code": "nimbus.project.doc_conflict",
+        "status": 409,
     }
 
 
@@ -186,7 +186,9 @@ def test_put_409_nested_detail_code_still_supported():
 def test_put_409_without_detail_code_maps_to_conflict():
     c = make_client(lambda req: httpx.Response(409, json={"detail": "doc_conflict"}))
     assert c.put("/api/projects/p1/doc", json={}) == {
-        "ok": False, "code": "conflict", "status": 409,
+        "ok": False,
+        "code": "conflict",
+        "status": 409,
     }
 
 
@@ -206,7 +208,7 @@ def test_connection_error_raises_backend_down_hint():
 
 
 # ── v0.6: backend >=400 errors carry structured status_code + code attrs ─────
-# inspect_file branches on these to convert the hosted local-path refusal into
+# data.inspect_file branches on these to convert the hosted local-path refusal into
 # guidance, instead of parsing the human-readable message text.
 
 

@@ -29,9 +29,20 @@ _METRIC_KEYS = (
 
 def _trim_summary(row: dict[str, Any]) -> dict[str, Any]:
     keys = (
-        "executionId", "status", "startedAt", "completedAt", "pipelineName",
-        "errorMessage", "hasArtifacts", "dataset", "subject", "paradigm",
-        "nTrain", "nEval", "nClasses", "chancePct",
+        "executionId",
+        "status",
+        "startedAt",
+        "completedAt",
+        "pipelineName",
+        "errorMessage",
+        "hasArtifacts",
+        "dataset",
+        "subject",
+        "paradigm",
+        "nTrain",
+        "nEval",
+        "nClasses",
+        "chancePct",
     )
     trimmed = {k: row.get(k) for k in keys if row.get(k) is not None}
     if row.get("metrics"):
@@ -46,7 +57,7 @@ def synth_layout(train_graph: dict[str, Any]) -> dict[str, Any]:
 
     The backend's POST /api/execute requires layout.nodes with x/y positions for
     every node; agents calling this server have no canvas, so positions are
-    assigned on a fixed grid. Shared with tools/projects.py (save_pipeline) so
+    assigned on a fixed grid. Shared with tools/projects.py (project.save) so
     every agent-built graph lands on the canvas the same way.
     """
     nodes: dict[str, Any] = {}
@@ -62,7 +73,7 @@ def synth_layout(train_graph: dict[str, Any]) -> dict[str, Any]:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=MUTATING)
+    @mcp.tool(name="execution.run", annotations=MUTATING)
     def run_pipeline(
         train_graph: dict[str, Any],
         name: str | None = None,
@@ -71,11 +82,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         layout: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Start a pipeline run (NON-BLOCKING). Returns executionId — poll with
-        get_execution() until status is completed/failed, then get_results().
+        execution.get() until status is completed/failed, then execution.results().
 
         Args:
             train_graph: Pipeline graph {nodes: [{id, type, config}], connections:
-                [{from, to}]} as built by get_template/validate_pipeline.
+                [{from, to}]} as built by catalog.template/pipeline.validate.
             name: Display name for the run (shown in the Runs list).
             description: Optional longer description of the experiment.
             subject: Optional dataset subject code (e.g. "S01") recorded with the run.
@@ -93,32 +104,32 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         return {
             "executionId": payload.get("executionId"),
             "message": payload.get("message"),
-            "pollHint": "Call get_execution(execution_id) to track progress; "
-            "get_results(execution_id) once completed.",
+            "pollHint": "Call execution.get(execution_id) to track progress; "
+            "execution.results(execution_id) once completed.",
         }
 
-    @mcp.tool(annotations=DESTRUCTIVE)
+    @mcp.tool(name="execution.cancel", annotations=DESTRUCTIVE)
     def cancel_execution(execution_id: str) -> dict[str, Any]:
         """Cancel a running execution.
 
         Args:
-            execution_id: The run to terminate (from run_pipeline/list_executions).
+            execution_id: The run to terminate (from execution.run/execution.list).
         """
         exec_id = safe_segment(execution_id)
         return client.post("/api/cancel", json={"executionId": exec_id})
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="execution.get", annotations=READ_ONLY)
     def get_execution(execution_id: str) -> dict[str, Any]:
         """Execution status summary (status: running/completed/failed/cancelled).
 
         Args:
-            execution_id: The run to check (from run_pipeline/list_executions).
+            execution_id: The run to check (from execution.run/execution.list).
         """
         exec_id = safe_segment(execution_id)
         payload = client.get(f"/api/executions/{exec_id}/summary")
         return _trim_summary(payload.get("summary", {}))
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="execution.list", annotations=READ_ONLY)
     def list_executions(limit: int = 20, status: str | None = None) -> dict[str, Any]:
         """Recent executions. Optional status filter (running/completed/failed/cancelled).
 
@@ -133,7 +144,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         rows = [_trim_summary(row) for row in payload.get("executions", [])]
         return {"total": payload.get("total", len(rows)), "executions": rows}
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="execution.results", annotations=READ_ONLY)
     def get_results(execution_id: str, full: bool = False) -> dict[str, Any]:
         """Metrics for a completed run. Trimmed by default (accuracy, kappa, ITR,
         confusion matrix, per-class); full=True returns the complete result object.

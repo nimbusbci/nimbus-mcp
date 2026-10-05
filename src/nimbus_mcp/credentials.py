@@ -105,9 +105,7 @@ class ResolvedCredential:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def credentials_store_path(
-    env: Mapping[str, str] | None = None, home: Path | None = None
-) -> Path:
+def credentials_store_path(env: Mapping[str, str] | None = None, home: Path | None = None) -> Path:
     """Location of the credential store (``NIMBUS_CREDENTIALS_FILE`` wins)."""
     env = os.environ if env is None else env
     home = Path.home() if home is None else home

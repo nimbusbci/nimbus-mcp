@@ -31,8 +31,9 @@ class FakeBackend:
       for execution ids listed in result_fail.
     """
 
-    def __init__(self, *, metrics=None, result_fail=(), queue_full_once=False,
-                 summary_fail_first=0):
+    def __init__(
+        self, *, metrics=None, result_fail=(), queue_full_once=False, summary_fail_first=0
+    ):
         self.metrics = metrics or {}
         self.result_fail = set(result_fail)
         self.queue_full_once = queue_full_once
@@ -98,11 +99,11 @@ def make_token_server(handler) -> FastMCP:
 
 
 async def wait_for_terminal(c: Client, experiment_id: str, timeout: float = 10.0):
-    """Poll get_experiment until the experiment leaves 'running' (<= timeout)."""
+    """Poll experiment.get until the experiment leaves 'running' (<= timeout)."""
     deadline = asyncio.get_running_loop().time() + timeout
     snapshot = None
     while asyncio.get_running_loop().time() < deadline:
-        snapshot = await c.call_tool("get_experiment", {"experiment_id": experiment_id})
+        snapshot = await c.call_tool("experiment.get", {"experiment_id": experiment_id})
         if snapshot.data["status"] != "running":
             return snapshot
         await asyncio.sleep(0.05)
@@ -114,7 +115,7 @@ async def test_run_experiment_single_run_completes_with_aggregates(monkeypatch):
     backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5, "accuracyPct": 70.0}})
     async with Client(make_server(backend)) as c:
         result = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         assert result.data["experimentId"]
         assert result.data["runs"][0]["name"] == "r1"
@@ -137,7 +138,7 @@ async def test_run_experiment_retries_queue_full(monkeypatch):
     backend = FakeBackend(queue_full_once=True, metrics={"exec_2": {"kappa": 0.5}})
     async with Client(make_server(backend)) as c:
         result = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         snapshot = await wait_for_terminal(c, result.data["experimentId"])
     assert snapshot.data["status"] == "completed"
@@ -153,7 +154,7 @@ async def test_run_experiment_retries_transient_summary_500s(monkeypatch):
     backend = FakeBackend(metrics={"exec_1": {"kappa": 0.55}}, summary_fail_first=2)
     async with Client(make_server(backend)) as c:
         result = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         snapshot = await wait_for_terminal(c, result.data["experimentId"])
     assert snapshot.data["status"] == "completed"
@@ -166,11 +167,11 @@ async def test_run_experiment_retries_transient_summary_500s(monkeypatch):
 async def test_run_experiment_validates_run_count():
     async with Client(make_server(FakeBackend())) as c:
         with pytest.raises(Exception, match="at least 1"):
-            await c.call_tool("run_experiment", {"runs": []})
+            await c.call_tool("experiment.run", {"runs": []})
         with pytest.raises(Exception, match="at most 25"):
             await c.call_tool(
-                "run_experiment", {"runs": [{"name": f"r{i}", "train_graph": TRAIN_GRAPH}
-                                            for i in range(26)]}
+                "experiment.run",
+                {"runs": [{"name": f"r{i}", "train_graph": TRAIN_GRAPH} for i in range(26)]},
             )
 
 
@@ -186,7 +187,7 @@ async def test_run_experiment_aggregates_exclude_failed_runs(monkeypatch):
         {"name": "r_c", "train_graph": TRAIN_GRAPH},
     ]
     async with Client(make_server(backend)) as c:
-        result = await c.call_tool("run_experiment", {"runs": runs})
+        result = await c.call_tool("experiment.run", {"runs": runs})
         snapshot = await wait_for_terminal(c, result.data["experimentId"])
     assert snapshot.data["status"] == "completed"  # not all runs failed
     by_name = {row["name"]: row for row in snapshot.data["runs"]}
@@ -204,7 +205,7 @@ async def test_run_experiment_aggregates_exclude_failed_runs(monkeypatch):
 async def test_get_experiment_unknown_id():
     async with Client(make_server(FakeBackend())) as c:
         with pytest.raises(Exception, match="Unknown experiment"):
-            await c.call_tool("get_experiment", {"experiment_id": "nope"})
+            await c.call_tool("experiment.get", {"experiment_id": "nope"})
 
 
 async def test_expired_token_on_summary_poll_is_not_retried(monkeypatch):
@@ -226,7 +227,7 @@ async def test_expired_token_on_summary_poll_is_not_retried(monkeypatch):
 
     async with Client(make_token_server(handler)) as c:
         result = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         snapshot = await wait_for_terminal(c, result.data["experimentId"])
     assert seen["summary"] == 1  # re-raised at once: retries would have hit 3
@@ -256,7 +257,7 @@ async def test_expired_token_on_result_fetch_is_not_result_fetch_failed(monkeypa
 
     async with Client(make_token_server(handler)) as c:
         result = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         snapshot = await wait_for_terminal(c, result.data["experimentId"])
     run = snapshot.data["runs"][0]

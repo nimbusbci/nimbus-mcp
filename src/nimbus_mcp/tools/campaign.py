@@ -1,6 +1,6 @@
 """Campaign tools: run a batch of pipelines as one paced experiment.
 
-``run_experiment`` validates, spawns a background worker thread and returns
+``experiment.run`` validates, spawns a background worker thread and returns
 immediately — the tool call never blocks on the worker. The worker submits at
 most ``min(max_concurrent, 2)`` runs in flight, submits the next run as each
 one reaches a terminal state (polling execution summaries), backs off and
@@ -49,9 +49,7 @@ class RunRow:
 
 
 class ExperimentState:
-    def __init__(
-        self, experiment_id: str, runs: list[RunRow], max_in_flight: int
-    ) -> None:
+    def __init__(self, experiment_id: str, runs: list[RunRow], max_in_flight: int) -> None:
         self.experiment_id = experiment_id
         self.runs = runs
         self.max_in_flight = max_in_flight
@@ -244,17 +242,17 @@ def _experiment_worker(state: ExperimentState, client: NimbusClient) -> None:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=MUTATING)
+    @mcp.tool(name="experiment.run", annotations=MUTATING)
     def run_experiment(runs: list[dict[str, Any]], max_concurrent: int = 2) -> dict[str, Any]:
         """Run 1-25 pipelines as ONE paced experiment (NON-BLOCKING). Returns an
         experimentId immediately; a background thread submits at most 2 runs at
         a time (min(max_concurrent, 2)), retries queue-full up to 3 times per
-        run, and polls each execution to completion. Poll get_experiment() for
+        run, and polls each execution to completion. Poll experiment.get() for
         per-run status and, once finished, aggregated metrics.
 
         Args:
             runs: 1-25 entries, each {name: str, train_graph: {nodes, connections}}
-                (same graph shape as run_pipeline's train_graph).
+                (same graph shape as execution.run's train_graph).
             max_concurrent: Parallel submissions cap, clamped to 1-2 (default 2).
         """
         # Preflight BEFORE registering state or spawning the worker thread:
@@ -263,10 +261,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # {status: "running"} instead of the setup guidance dict.
         client.ensure_ready()
         if not runs:
-            raise McpToolError("run_experiment needs at least 1 run (got 0).")
+            raise McpToolError("experiment.run needs at least 1 run (got 0).")
         if len(runs) > MAX_RUNS:
             raise McpToolError(
-                f"run_experiment accepts at most {MAX_RUNS} runs (got {len(runs)}). "
+                f"experiment.run accepts at most {MAX_RUNS} runs (got {len(runs)}). "
                 "Split the sweep into several experiments."
             )
         prepared: list[RunRow] = []
@@ -274,7 +272,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             if not isinstance(item, dict) or not isinstance(item.get("train_graph"), dict):
                 raise McpToolError(
                     f"Run {index} is invalid: every run needs a 'train_graph' dict "
-                    "(same shape as run_pipeline's train_graph)."
+                    "(same shape as execution.run's train_graph)."
                 )
             prepared.append(
                 RunRow(
@@ -299,11 +297,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "experimentId": experiment_id,
             "status": "running",
             "runs": [{"name": run.name, "executionId": None} for run in prepared],
-            "pollHint": "Runs submit in the background. Call get_experiment(experiment_id) "
+            "pollHint": "Runs submit in the background. Call experiment.get(experiment_id) "
             "until status is completed or failed.",
         }
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="experiment.get", annotations=READ_ONLY)
     def get_experiment(experiment_id: str) -> dict[str, Any]:
         """Experiment snapshot: status (running/completed/failed), per-run rows
         ({name, executionId, status, error?, metrics?}) and, once finished,
@@ -311,9 +309,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         runs only (std = population; None below 2 values).
 
         Args:
-            experiment_id: The experiment to inspect (from run_experiment).
+            experiment_id: The experiment to inspect (from experiment.run).
         """
-        # Symmetry with run_experiment: in setup mode no experiment can exist
+        # Symmetry with experiment.run: in setup mode no experiment can exist
         # (its preflight refuses), so answer with guidance rather than the
         # confusing "Unknown experiment".
         client.ensure_ready()

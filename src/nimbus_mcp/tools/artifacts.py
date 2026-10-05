@@ -18,7 +18,7 @@ def _safe_name(name: str) -> str:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="execution.artifacts", annotations=READ_ONLY)
     def list_artifacts(execution_id: str) -> dict[str, Any]:
         """Trained artifacts (models/filters, e.g. *.pkl) saved by an execution.
 
@@ -35,13 +35,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             ],
         }
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="execution.download_artifact", annotations=READ_ONLY)
     def download_artifact(execution_id: str, artifact_name: str) -> dict[str, Any]:
         """Download one artifact file to NIMBUS_EXPORT_DIR/executions/<id>/ and return its path.
 
         Args:
             execution_id: Run that produced the artifact.
-            artifact_name: File name from list_artifacts (e.g. "nimbus_lda.pkl").
+            artifact_name: File name from execution.artifacts (e.g. "nimbus_lda.pkl").
         """
         exec_id = safe_segment(execution_id)
         artifact = _safe_name(artifact_name)
@@ -52,7 +52,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         dest.write_bytes(data)
         return {"path": str(dest), "size": len(data)}
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="pipeline.export", annotations=READ_ONLY)
     def export_python(train_graph: dict[str, Any], name: str | None = None) -> dict[str, Any]:
         """Export the pipeline as a standalone runnable Python bundle (zip saved locally).
 

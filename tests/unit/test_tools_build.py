@@ -41,7 +41,7 @@ async def test_validate_pipeline_posts_train_key():
         raise AssertionError(f"unexpected path {req.url.path}")
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("validate_pipeline", {"train_graph": TRAIN_GRAPH})
+        result = await c.call_tool("pipeline.validate", {"train_graph": TRAIN_GRAPH})
     assert b'"train"' in seen["body"]
     assert result.data["valid"] is False
     assert result.data["validationErrors"][0]["message"] == "no model"
@@ -56,7 +56,7 @@ async def test_validate_node_config_camel_case_body():
 
     async with Client(make_server(handler)) as c:
         await c.call_tool(
-            "validate_node_config",
+            "pipeline.validate_node",
             {"node_type": "bandpass_filter", "config": {"lowCut": 8}},
         )
     assert b'"nodeType"' in seen["body"] and b'"lowCut"' in seen["body"]

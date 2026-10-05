@@ -24,9 +24,11 @@ def _reset_watchdog_registry():
 def make_server(handler, calls=None) -> FastMCP:
     transport = httpx.MockTransport(handler)
     if calls is not None:
+
         def tracking(req: httpx.Request) -> httpx.Response:
             calls.append(req.url.path)
             return handler(req)
+
         transport = httpx.MockTransport(tracking)
     client = NimbusClient(
         McpConfig(api_url="http://t", mcp_key="k", export_dir=None),  # type: ignore[arg-type]
@@ -38,13 +40,18 @@ def make_server(handler, calls=None) -> FastMCP:
 
 
 async def test_list_devices():
-    async with Client(make_server(
-        lambda r: httpx.Response(
-            200,
-            json={"ok": True, "devices": [{"id": "brainbit", "name": "BrainBit", "channels": 4}]},
+    async with Client(
+        make_server(
+            lambda r: httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "devices": [{"id": "brainbit", "name": "BrainBit", "channels": 4}],
+                },
+            )
         )
-    )) as c:
-        result = await c.call_tool("list_devices", {})
+    ) as c:
+        result = await c.call_tool("device.list", {})
     assert result.data["devices"][0]["id"] == "brainbit"
 
 
@@ -59,17 +66,17 @@ async def test_test_device_camel_case_body():
 
     async with Client(make_server(handler)) as c:
         await c.call_tool(
-            "test_device", {"device_type": "brainbit", "connection_type": "bluetooth"}
+            "device.test", {"device_type": "brainbit", "connection_type": "bluetooth"}
         )
     assert b'"deviceType"' in seen["body"] and b'"connectionType"' in seen["body"]
 
 
 async def test_start_stream_refuses_without_confirm_and_makes_no_calls():
     calls: list[str] = []
-    async with Client(make_server(
-        lambda r: httpx.Response(200, json={"ok": True}), calls=calls
-    )) as c:
-        result = await c.call_tool("start_stream", {"device_type": "brainbit"})
+    async with Client(
+        make_server(lambda r: httpx.Response(200, json={"ok": True}), calls=calls)
+    ) as c:
+        result = await c.call_tool("stream.start", {"device_type": "brainbit"})
     assert result.data["started"] is False
     assert "confirm" in result.data["message"].lower()
     assert calls == []  # rail: zero HTTP calls without confirm
@@ -83,8 +90,14 @@ async def test_start_stream_chains_connect_then_start():
         if req.url.path == "/api/hardware/connect":
             return httpx.Response(
                 200,
-                json={"ok": True, "status": "success", "sessionId": "sess-1",
-                      "connected": True, "deviceType": "brainbit", "channels": 4},
+                json={
+                    "ok": True,
+                    "status": "success",
+                    "sessionId": "sess-1",
+                    "connected": True,
+                    "deviceType": "brainbit",
+                    "channels": 4,
+                },
             )
         if req.url.path == "/api/hardware/start-stream":
             body = req.read()
@@ -96,7 +109,7 @@ async def test_start_stream_chains_connect_then_start():
 
     async with Client(make_server(handler)) as c:
         result = await c.call_tool(
-            "start_stream", {"device_type": "brainbit", "confirm": True, "chunk_size": 250}
+            "stream.start", {"device_type": "brainbit", "confirm": True, "chunk_size": 250}
         )
     assert calls == ["/api/hardware/connect", "/api/hardware/start-stream"]
     assert result.data["started"] is True and result.data["sessionId"] == "sess-1"
@@ -112,7 +125,7 @@ async def test_stream_status_query_param():
         )
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("stream_status", {"session_id": "sess-1"})
+        result = await c.call_tool("stream.status", {"session_id": "sess-1"})
     assert result.data["running"] is True
 
 
@@ -128,7 +141,7 @@ async def test_stop_stream_stops_then_disconnects_best_effort():
         raise AssertionError(req.url.path)
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("stop_stream", {"session_id": "sess-1"})
+        result = await c.call_tool("stream.stop", {"session_id": "sess-1"})
     assert calls == ["/api/hardware/stop-stream", "/api/hardware/disconnect"]
     assert result.data["stopped"] is True and result.data["disconnectWarning"] is None
 
@@ -139,7 +152,7 @@ async def test_stream_status_rejects_bad_session_id():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="Invalid session id"):
-            await c.call_tool("stream_status", {"session_id": "../evil"})
+            await c.call_tool("stream.status", {"session_id": "../evil"})
 
 
 def _streaming_backend(calls: list[str]) -> Callable[[httpx.Request], httpx.Response]:
@@ -151,8 +164,14 @@ def _streaming_backend(calls: list[str]) -> Callable[[httpx.Request], httpx.Resp
         if path == "/api/hardware/connect":
             return httpx.Response(
                 200,
-                json={"ok": True, "status": "success", "sessionId": "sess-1",
-                      "connected": True, "deviceType": "brainbit", "channels": 4},
+                json={
+                    "ok": True,
+                    "status": "success",
+                    "sessionId": "sess-1",
+                    "connected": True,
+                    "deviceType": "brainbit",
+                    "channels": 4,
+                },
             )
         if path == "/api/hardware/start-stream":
             return httpx.Response(200, json={"ok": True, "started": True, "updateRateHz": 2.0})
@@ -172,7 +191,7 @@ async def test_watchdog_stops_idle_session(monkeypatch):
     calls: list[str] = []
     async with Client(make_server(_streaming_backend(calls))) as c:
         result = await c.call_tool(
-            "start_stream", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 1}
+            "stream.start", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 1}
         )
         assert result.data["started"] is True
         time.sleep(2.5)
@@ -188,7 +207,7 @@ async def test_watchdog_zero_timeout_never_registers(monkeypatch):
     calls: list[str] = []
     async with Client(make_server(_streaming_backend(calls))) as c:
         await c.call_tool(
-            "start_stream", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 0}
+            "stream.start", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 0}
         )
         with activity._LOCK:
             assert "sess-1" not in activity._SESSIONS
@@ -198,16 +217,16 @@ async def test_watchdog_zero_timeout_never_registers(monkeypatch):
 
 
 async def test_stream_status_polling_keeps_session_alive(monkeypatch):
-    """(c) stream_status notes activity, so a polled session is never stopped."""
+    """(c) stream.status notes activity, so a polled session is never stopped."""
     monkeypatch.setattr(activity, "CHECK_INTERVAL_SEC", 0.5)
     calls: list[str] = []
     async with Client(make_server(_streaming_backend(calls))) as c:
         await c.call_tool(
-            "start_stream", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 1}
+            "stream.start", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 1}
         )
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline:
-            await c.call_tool("stream_status", {"session_id": "sess-1"})
+            await c.call_tool("stream.status", {"session_id": "sess-1"})
             await asyncio.sleep(0.3)
     assert "/api/hardware/stop-stream" not in calls
     assert "/api/hardware/disconnect" not in calls

@@ -11,9 +11,7 @@ import time
 import pytest
 from fastmcp import Client
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("NIMBUS_MCP_E2E") != "1", reason="NIMBUS_MCP_E2E!=1"
-)
+pytestmark = pytest.mark.skipif(os.environ.get("NIMBUS_MCP_E2E") != "1", reason="NIMBUS_MCP_E2E!=1")
 
 
 def _server():
@@ -24,60 +22,58 @@ def _server():
 
 async def test_full_offline_flow():
     async with Client(_server()) as c:
-        nodes = await c.call_tool("list_nodes", {})
+        nodes = await c.call_tool("catalog.nodes", {})
         assert nodes.data["count"] > 0
-        templates = await c.call_tool("list_templates", {})
+        templates = await c.call_tool("catalog.templates", {})
         assert templates.data["count"] > 0
         template_id = templates.data["templates"][0]["id"]
-        detail = await c.call_tool("get_template", {"template_id": template_id})
+        detail = await c.call_tool("catalog.template", {"template_id": template_id})
         train = detail.data["train"]
-        validated = await c.call_tool("validate_pipeline", {"train_graph": train})
+        validated = await c.call_tool("pipeline.validate", {"train_graph": train})
         assert validated.data["valid"] is True
         started = await c.call_tool(
-            "run_pipeline", {"train_graph": train, "name": "mcp e2e smoke"}
+            "execution.run", {"train_graph": train, "name": "mcp e2e smoke"}
         )
         execution_id = started.data["executionId"]
         deadline = time.time() + 900
         status = "running"
         while time.time() < deadline:
-            summary = await c.call_tool("get_execution", {"execution_id": execution_id})
+            summary = await c.call_tool("execution.get", {"execution_id": execution_id})
             status = summary.data["status"]
             if status in ("completed", "failed", "cancelled"):
                 break
             time.sleep(5)
         assert status == "completed", f"execution ended as {status}"
-        results = await c.call_tool("get_results", {"execution_id": execution_id})
+        results = await c.call_tool("execution.results", {"execution_id": execution_id})
         assert "kappa" in results.data["metrics"]
 
 
 async def test_projects_and_experiment_flow():
     async with Client(_server()) as c:
-        proj = await c.call_tool("create_project", {"name": "mcp v0.2 e2e"})
+        proj = await c.call_tool("project.create", {"name": "mcp v0.2 e2e"})
         pid = proj.data["projectId"]
-        templates = await c.call_tool("list_templates", {})
+        templates = await c.call_tool("catalog.templates", {})
         train = (
             await c.call_tool(
-                "get_template", {"template_id": templates.data["templates"][0]["id"]}
+                "catalog.template", {"template_id": templates.data["templates"][0]["id"]}
             )
         ).data["train"]
-        saved = await c.call_tool(
-            "save_pipeline", {"project_id": pid, "train_graph": train}
-        )
+        saved = await c.call_tool("project.save", {"project_id": pid, "train_graph": train})
         assert saved.data["revision"] >= 1
-        loaded = await c.call_tool("load_pipeline", {"project_id": pid})
+        loaded = await c.call_tool("project.load", {"project_id": pid})
         assert loaded.data["train"]["nodes"]
         exp = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "smoke", "train_graph": train}]}
+            "experiment.run", {"runs": [{"name": "smoke", "train_graph": train}]}
         )
         eid = exp.data["experimentId"]
         deadline = time.time() + 900
         status = "running"
         while time.time() < deadline:
-            s = await c.call_tool("get_experiment", {"experiment_id": eid})
+            s = await c.call_tool("experiment.get", {"experiment_id": eid})
             status = s.data["status"]
             if status in ("completed", "failed"):
                 break
             time.sleep(5)
         assert status == "completed", f"experiment ended as {status}"
-        s = await c.call_tool("get_experiment", {"experiment_id": eid})
+        s = await c.call_tool("experiment.get", {"experiment_id": eid})
         assert s.data["aggregates"]["kappa"]["mean"] is not None

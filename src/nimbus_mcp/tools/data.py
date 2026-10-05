@@ -13,13 +13,13 @@ from ..client import McpToolError, NimbusClient
 from ._annotations import MUTATING
 
 _USAGE = (
-    "Use this path as a custom_data node's filePath in run_pipeline/validate_pipeline "
-    "(config: {\"filePath\": \"<path>\", \"format\": \"<format>\", ...})."
+    "Use this path as a custom_data node's filePath in execution.run/pipeline.validate "
+    '(config: {"filePath": "<path>", "format": "<format>", ...}).'
 )
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=MUTATING)
+    @mcp.tool(name="data.upload", annotations=MUTATING)
     def upload_data(
         file_path: str,
         dataset_name: str | None = None,

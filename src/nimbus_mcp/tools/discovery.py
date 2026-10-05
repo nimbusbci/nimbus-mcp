@@ -12,11 +12,11 @@ from ._guards import safe_segment
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="catalog.nodes", annotations=READ_ONLY)
     def list_nodes(category: str | None = None) -> dict[str, Any]:
         """List Nimbus pipeline node types (data, preprocessing, features, models...).
 
-        Use get_node_schema(node_type) for one node's full config schema and ports.
+        Use catalog.node_schema(node_type) for one node's full config schema and ports.
 
         Args:
             category: Optional filter — e.g. "data", "preprocessing", "features",
@@ -41,12 +41,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         ]
         return {"count": len(nodes), "nodes": nodes}
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="catalog.node_schema", annotations=READ_ONLY)
     def get_node_schema(node_type: str) -> dict[str, Any]:
         """Full config JSON schema + input/output ports for one node type.
 
         Args:
-            node_type: Node id from list_nodes (e.g. "csp", "nimbus_lda").
+            node_type: Node id from catalog.nodes (e.g. "csp", "nimbus_lda").
         """
         payload = client.get("/api/node-types")
         for node in payload.get("nodeTypes", []):
@@ -57,13 +57,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                     "configSchema": node.get("configSchema", {}),
                     "ports": {"inputs": node.get("inputs", []), "outputs": node.get("outputs", [])},
                 }
-        raise McpToolError(
-            f"Unknown node type '{node_type}'. Call list_nodes() for valid ids."
-        )
+        raise McpToolError(f"Unknown node type '{node_type}'. Call catalog.nodes() for valid ids.")
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="catalog.templates", annotations=READ_ONLY)
     def list_templates() -> dict[str, Any]:
-        """List built-in starter pipelines (MI/P300/SSVEP...). get_template(id) for the graph."""
+        """List built-in starter pipelines (MI/P300/SSVEP...).
+        catalog.template(id) returns the graph."""
         payload = client.get("/api/templates")
         templates = [
             {
@@ -77,12 +76,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         ]
         return {"count": len(templates), "templates": templates}
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="catalog.template", annotations=READ_ONLY)
     def get_template(template_id: str) -> dict[str, Any]:
-        """Full template incl. the 'train' execGraph needed by run_pipeline/validate_pipeline.
+        """Full template incl. the 'train' execGraph needed by execution.run/pipeline.validate.
 
         Args:
-            template_id: Template id from list_templates (e.g. "mi_csp_lda").
+            template_id: Template id from catalog.templates (e.g. "mi_csp_lda").
         """
         tid = safe_segment(template_id, label="template id")
         payload = client.get(f"/api/templates/{tid}")
@@ -94,7 +93,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "train": template.get("train"),
         }
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="catalog.datasets", annotations=READ_ONLY)
     def list_datasets(only_on_disk: bool = True) -> dict[str, Any]:
         """Curated public EEG datasets (MOABB packs) available to pipelines.
 

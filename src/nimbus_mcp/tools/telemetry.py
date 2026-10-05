@@ -12,16 +12,16 @@ from ._guards import safe_segment
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="stream.telemetry", annotations=READ_ONLY)
     def get_live_session(session_id: str, window: int = 50) -> dict[str, Any]:
         """Live snapshot of a streaming session: latest prediction + recent window,
         signal quality (meanChannelQuality, snrDb, artifactProbability), indicators,
         running stats. Poll this while a session runs. Live telemetry requires a
         DEPLOYED model session (hub deploy / playback with a classifier); modelless
-        hardware streams have no telemetry — use stream_status for those. Expect low
+        hardware streams have no telemetry — use stream.status for those. Expect low
         confidence during filter/ASR warm-up (first seconds); quality < 0.5 or high
         artifactProbability means the signal is poor. 404 => session not active in
-        this backend. Each poll also feeds the idle watchdog (see start_stream's
+        this backend. Each poll also feeds the idle watchdog (see stream.start's
         idle_timeout_sec), keeping an actively watched session alive.
 
         Args:

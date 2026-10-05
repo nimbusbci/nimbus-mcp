@@ -13,7 +13,7 @@ from .run import synth_layout
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=MUTATING)
+    @mcp.tool(name="project.create", annotations=MUTATING)
     def create_project(name: str, description: str | None = None) -> dict[str, Any]:
         """Create a project (container for one pipeline document). Returns projectId.
 
@@ -28,20 +28,24 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         project = payload.get("project", {})
         return {"ok": True, "projectId": project.get("id"), "name": project.get("name")}
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="project.list", annotations=READ_ONLY)
     def list_projects() -> dict[str, Any]:
         """List projects owned by the current principal (agent work included)."""
         payload = client.get("/api/projects")
         return {
             "count": payload.get("count"),
             "projects": [
-                {"id": p.get("id"), "name": p.get("name"),
-                 "description": p.get("description"), "updatedAt": p.get("updatedAt")}
+                {
+                    "id": p.get("id"),
+                    "name": p.get("name"),
+                    "description": p.get("description"),
+                    "updatedAt": p.get("updatedAt"),
+                }
                 for p in payload.get("projects", [])
             ],
         }
 
-    @mcp.tool(annotations=MUTATING)
+    @mcp.tool(name="project.save", annotations=MUTATING)
     def save_pipeline(
         project_id: str,
         train_graph: dict[str, Any],
@@ -52,7 +56,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Handles revision conflicts automatically (one retry).
 
         Args:
-            project_id: Target project (from create_project/list_projects).
+            project_id: Target project (from project.create/project.list).
             train_graph: Pipeline graph {nodes, connections} to persist.
             name: Optional pipeline name stored on the document.
             subject: Optional dataset subject code (e.g. "S01") for this pipeline.
@@ -60,8 +64,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         pid = safe_segment(project_id, label="project id")
         current = client.get(f"/api/projects/{pid}/doc")
         body: dict[str, Any] = {
-            "train": {**train_graph, "layout": train_graph.get("layout")
-                      or synth_layout(train_graph)},
+            "train": {
+                **train_graph,
+                "layout": train_graph.get("layout") or synth_layout(train_graph),
+            },
             "expectedRevision": current.get("revision", 0),
         }
         if name is not None:
@@ -79,13 +85,17 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 raise McpToolError(
                     f"Pipeline save conflict persists after one retry "
                     f"({payload.get('code', 'conflict')}). The project document was "
-                    f"modified concurrently — call load_pipeline('{pid}') to fetch the "
+                    f"modified concurrently — call project.load('{pid}') to fetch the "
                     "latest revision, merge your changes on top, and save again."
                 )
-        return {"ok": payload.get("ok", True), "projectId": payload.get("projectId", pid),
-                "revision": payload.get("revision"), "message": payload.get("message")}
+        return {
+            "ok": payload.get("ok", True),
+            "projectId": payload.get("projectId", pid),
+            "revision": payload.get("revision"),
+            "message": payload.get("message"),
+        }
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="project.load", annotations=READ_ONLY)
     def load_pipeline(project_id: str) -> dict[str, Any]:
         """Load a project's saved pipeline (train graph + meta) for editing/re-running.
 

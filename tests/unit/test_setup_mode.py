@@ -74,8 +74,11 @@ def assert_is_guidance(data: dict) -> None:
     assert data["setupRequired"] is True
     assert "nimbus-mcp login" in data["message"]
     actions = [option["action"] for option in data["options"]]
-    assert actions == ["nimbus-mcp login", "start the Nimbus Studio desktop app",
-                       "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE"]
+    assert actions == [
+        "nimbus-mcp login",
+        "start the Nimbus Studio desktop app",
+        "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -84,20 +87,20 @@ def assert_is_guidance(data: dict) -> None:
 
 
 async def test_setup_mode_guidance_from_three_tool_families():
-    """list_templates (discovery), run_pipeline (run), list_devices (live) —
+    """catalog.templates (discovery), execution.run (run), device.list (live) —
     no HTTP happens; each call returns the structured guidance dict."""
     server = build_server()  # isolated env resolves nothing → NullClient
     async with Client(server) as c:
         tools = {tool.name for tool in (await c.list_tools())}
-    assert "whoami" in tools  # every tool is registered in setup mode
+    assert "account.whoami" in tools  # every tool is registered in setup mode
     assert len(tools) >= 30
 
     async with Client(server) as c:
         for name, args in (
-            ("list_templates", {}),
-            ("run_pipeline", {"train_graph": TRAIN_GRAPH}),
-            ("list_devices", {}),
-            ("whoami", {}),
+            ("catalog.templates", {}),
+            ("execution.run", {"train_graph": TRAIN_GRAPH}),
+            ("device.list", {}),
+            ("account.whoami", {}),
         ):
             result = await c.call_tool(name, args)
             assert not result.is_error
@@ -129,10 +132,10 @@ def test_null_client_every_method_raises_setup_required():
 
 
 async def test_setup_mode_experiment_tools_preflight_before_worker():
-    """run_experiment preflights the credential BEFORE registering state or
+    """experiment.run preflights the credential BEFORE registering state or
     spawning the worker thread — the worker's catch-all would otherwise
     swallow SetupRequired into per-run errors and the tool would answer a
-    misleading {status: "running"} instead of the guidance dict. get_experiment
+    misleading {status: "running"} instead of the guidance dict. experiment.get
     for symmetry: in setup mode no experiment can exist, so guidance beats the
     confusing "Unknown experiment" error."""
     from nimbus_mcp.tools import campaign
@@ -141,12 +144,12 @@ async def test_setup_mode_experiment_tools_preflight_before_worker():
     server = build_server()  # isolated env resolves nothing → NullClient
     async with Client(server) as c:
         result = await c.call_tool(
-            "run_experiment", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         assert not result.is_error
         assert_is_guidance(result.data)
 
-        poll = await c.call_tool("get_experiment", {"experiment_id": "anything"})
+        poll = await c.call_tool("experiment.get", {"experiment_id": "anything"})
         assert not poll.is_error
         assert_is_guidance(poll.data)
     # nothing was registered and no worker thread was spawned
@@ -166,7 +169,7 @@ async def test_401_expired_token_returns_guidance_with_days_expired():
     )
     server = build_server(client)
     async with Client(server) as c:
-        result = await c.call_tool("run_pipeline", {"train_graph": TRAIN_GRAPH})
+        result = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
     assert_is_guidance(result.data)
     assert result.data["daysExpired"] == 3
     assert "expired 3 day" in result.data["message"]
@@ -181,7 +184,7 @@ async def test_401_revoked_token_reports_days_left():
     )
     server = build_server(client)
     async with Client(server) as c:
-        result = await c.call_tool("list_templates", {})
+        result = await c.call_tool("catalog.templates", {})
     assert_is_guidance(result.data)
     assert result.data["daysLeft"] == 10
     assert "revoked" in result.data["message"]
@@ -190,7 +193,9 @@ async def test_401_revoked_token_reports_days_left():
 def test_401_undecodable_token_still_guides_to_login():
     client = NimbusClient(
         McpConfig(
-            api_url="http://t", mcp_key="", export_dir=Path("/tmp/nx"),
+            api_url="http://t",
+            mcp_key="",
+            export_dir=Path("/tmp/nx"),
             nimbus_token="nimb_not-a-jwt",
         ),
         transport=httpx.MockTransport(lambda r: httpx.Response(401, json={})),
@@ -242,7 +247,7 @@ async def test_run_pipeline_quota_403_carries_pricing_link():
     server = build_server(client)
     async with Client(server) as c:
         with pytest.raises(ToolError) as excinfo:
-            await c.call_tool("run_pipeline", {"train_graph": TRAIN_GRAPH})
+            await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
     message = str(excinfo.value)
     assert "Monthly free training quota exceeded." in message
     assert "https://studio.nimbusbci.com/pricing?reason=mcp-quota" in message

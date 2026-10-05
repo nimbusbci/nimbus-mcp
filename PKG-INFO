@@ -1,6 +1,6 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.6.1
+Version: 0.7.0
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
@@ -472,13 +472,13 @@ returns the same shape, including how many days ago it expired and a
 ### Checking who you are
 
 ```
-whoami() → {userId, email, plan: {isPro, pioneerAccess},
+account.whoami() → {userId, email, plan: {isPro, pioneerAccess},
             freeRuns: {monthlyLimit, remaining},
             token: {name, expiresAt, daysLeft} | null,   # hosted-token mode only
             source}                                      # store | env | token_file | …
 ```
 
-Call `whoami()` from the agent to see the account, plan, this month's free-run
+Call `account.whoami()` from the agent to see the account, plan, this month's free-run
 quota, and (in token mode) the token's days-to-expiry; `nimbus-mcp status` is
 the terminal equivalent with a live backend probe.
 
@@ -520,8 +520,8 @@ with it: switching the id mid-life splits ownership of agent-created work across
 principals, and neither identity then sees the whole history.
 
 Watchdog default: streaming sessions started through MCP are auto-stopped after
-15 minutes with no one watching (every `stream_status` / `get_live_session` poll
-resets the timer). Pass `idle_timeout_sec=0` to `start_stream` to disable it for a
+15 minutes with no one watching (every `stream.status` / `stream.telemetry` poll
+resets the timer). Pass `idle_timeout_sec=0` to `stream.start` to disable it for a
 session.
 
 When enabling `MCP_LOCAL_KEY` on a machine connected to an untrusted network, also set
@@ -604,22 +604,22 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 
 ## Tools (32)
 
-Auth: `whoami` (account, plan, quota, token expiry)
-Discovery: `list_nodes`, `get_node_schema`, `list_templates`, `get_template`, `list_datasets`, `get_leaderboard`
-Data: `upload_data`
-Inspect: `inspect_dataset`, `inspect_file` (EDA: channels, class balance, band powers, PSD)
-Build: `validate_pipeline`, `validate_node_config`
-Run: `run_pipeline` (non-blocking), `get_execution`, `list_executions`, `get_results`, `cancel_execution`
-Campaigns: `run_experiment` (non-blocking, 1-25 paced runs), `get_experiment`
-Artifacts: `list_artifacts`, `download_artifact`, `export_python`
-Live: `list_devices`, `test_device`, `start_stream` (needs `confirm=true`),
-`stream_status`, `get_live_session`, `stop_stream`
-Projects: `create_project`, `list_projects`, `save_pipeline`, `load_pipeline`
+Auth: `account.whoami` (account, plan, quota, token expiry)
+Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
+Data: `data.upload`
+Inspect: `data.inspect_dataset`, `data.inspect_file` (EDA: channels, class balance, band powers, PSD)
+Build: `pipeline.validate`, `pipeline.validate_node`
+Run: `execution.run` (non-blocking), `execution.get`, `execution.list`, `execution.results`, `execution.cancel`
+Campaigns: `experiment.run` (non-blocking, 1-25 paced runs), `experiment.get`
+Artifacts: `execution.artifacts`, `execution.download_artifact`, `pipeline.export`
+Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
+`stream.status`, `stream.telemetry`, `stream.stop`
+Projects: `project.create`, `project.list`, `project.save`, `project.load`
 
-Not sure which pipeline to build? `get_leaderboard()` ranks benchmarked pipelines
+Not sure which pipeline to build? `catalog.leaderboard()` ranks benchmarked pipelines
 per dataset (`meanAccuracyPct` desc, 95% CI) under the canonical `within_session`
 protocol — agents pick templates by ranking there and pull the winner with
-`get_template(pipelineId)`.
+`catalog.template(pipelineId)`.
 
 ## Look at your data first
 
@@ -630,32 +630,32 @@ PSD overview — for a public dataset or a file on disk.
 > "Inspect BNCI2014_001 subject S01 before we pick a pipeline."
 
 ```python
-inspect_dataset(dataset="BNCI2014_001", subject="S01", mode="all")
+data.inspect_dataset(dataset="BNCI2014_001", subject="S01", mode="all")
 # → {channels: {count: 22, names: [...], flatlined: []}, samplingRate: 250,
 #    trials: {count: 288, classLabels: [...], classCounts: {...}},
 #    channelStats: [...], bandPowers: {...}, psd: {...},
 #    computedFrom: {nSamples: ..., sampleStrategy: "stratified_sample_seed42_4_of_20"}}
 ```
 
-`subject` is required (e.g. `"S01"`; get the list via `list_datasets`) and a
+`subject` is required (e.g. `"S01"`; get the list via `catalog.datasets`) and a
 comma-list like `"S01,S03"` loads a cohort; `mode` is `training |
 evaluation | all`.
 
-The same works for files: `inspect_file` picks the source from the path
+The same works for files: `data.inspect_file` picks the source from the path
 shape. An ABSOLUTE path reads the file from disk (local backend only —
 desktop app / MCP local mode: no upload step, the data never leaves the
-machine); a RELATIVE path — the one `upload_data` returns — describes the
+machine); a RELATIVE path — the one `data.upload` returns — describes the
 uploaded file on ANY backend (hosted or local):
 
 > "Look at ~/recordings/session-01.edf and tell me if the montage is sane."
 
 ```python
-inspect_file(path="/Users/you/recordings/session-01.edf")  # absolute → local file
-inspect_file(path="uploads/<user>/session-01.edf")         # upload_data path → upload
+data.inspect_file(path="/Users/you/recordings/session-01.edf")  # absolute → local file
+data.inspect_file(path="uploads/<user>/session-01.edf")         # data.upload path → upload
 ```
 
-On a hosted backend absolute paths are refused — `inspect_file` then returns
-guidance (`upload_data` the file and pass the returned path back, or point
+On a hosted backend absolute paths are refused — `data.inspect_file` then returns
+guidance (`data.upload` the file and pass the returned path back, or point
 the server at a local backend) instead of a dead end.
 
 Why inspect first: **class balance drives stratification** (imbalanced classes
@@ -672,24 +672,24 @@ Bring your own recordings instead of (or alongside) the public datasets.
 > "I have a `.edf` recording at `~/recordings/session-01.edf` — upload it and build
 > a pipeline around it."
 
-The agent calls `upload_data(file_path=…)`, which registers the file with the
+The agent calls `data.upload(file_path=…)`, which registers the file with the
 backend and returns the stored path; that path goes into a `custom_data` node's
-config (`{"filePath": "<path>", "format": "edf", …}`) for `validate_pipeline` /
-`run_pipeline` / `run_experiment`. For plain CSV/TSV/TXT without embedded
+config (`{"filePath": "<path>", "format": "edf", …}`) for `pipeline.validate` /
+`execution.run` / `experiment.run`. For plain CSV/TSV/TXT without embedded
 metadata, pass `sampling_rate` (Hz) — the backend silently assumes 250 Hz
 otherwise; `format` overrides extension-based detection.
 
 ## Experiment campaigns
 
-One `run_experiment` call = a paced sweep of 1-25 pipelines (at most 2 training
+One `experiment.run` call = a paced sweep of 1-25 pipelines (at most 2 training
 runs in flight) with aggregated metrics, instead of the agent babysitting 25
-individual `run_pipeline` polls.
+individual `execution.run` polls.
 
 > "Compare CSP-LDA vs EEGNet on BNCI2014_001 across subjects 1-3."
 
 The agent builds six train graphs, calls
-`run_experiment(runs=[{name: "csp-lda-s1", train_graph: …}, …])`, gets an
-`experimentId` back immediately, then polls `get_experiment(experiment_id)` until
+`experiment.run(runs=[{name: "csp-lda-s1", train_graph: …}, …])`, gets an
+`experimentId` back immediately, then polls `experiment.get(experiment_id)` until
 status is `completed` — per-run status and, at the end,
 `aggregates` like `{"kappa": {"mean": 0.61, "std": 0.08, "best": {name, value}}}`
 (mean/std/best over completed runs only).
@@ -702,9 +702,9 @@ projects, so you can open the canvas and see exactly what ran.
 > "Save this pipeline as a project called 'motor-imagery-baseline' — I'll review
 > it in the studio."
 
-`create_project(name)` makes the container, `save_pipeline(project_id,
+`project.create(name)` makes the container, `project.save(project_id,
 train_graph)` writes the graph (layout auto-generated, revision conflicts retried
-once) and `load_pipeline(project_id)` reads it back for editing or re-running.
+once) and `project.load(project_id)` reads it back for editing or re-running.
 With `MCP_LOCAL_USER_ID` set to your user id, the project shows up in **your**
 studio project list.
 
@@ -715,7 +715,7 @@ what it sees.
 
 > "Watch my focus session and tell me when signal quality drops."
 
-The agent polls `get_live_session(session_id)` — latest prediction, the recent
+The agent polls `stream.telemetry(session_id)` — latest prediction, the recent
 window, signal quality (`meanChannelQuality`, `snrDb`, `artifactProbability`) and
 running stats — and warns when quality degrades. Each poll also resets the idle
 watchdog, so a session under active watch is never auto-stopped; an abandoned one
@@ -723,7 +723,7 @@ is shut down after 15 minutes.
 
 ## Safety
 
-`start_stream` refuses to run without `confirm=true` — it connects an EEG device and
+`stream.start` refuses to run without `confirm=true` — it connects an EEG device and
 starts a live session on a human. The `X-MCP-Key` path is machine-local only
 (never accepted on Fly deployments); hosted mode authenticates with a personal
 `Authorization: Bearer` token from `nimbus-mcp login` (see **Authentication**

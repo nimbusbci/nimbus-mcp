@@ -35,9 +35,7 @@ MAPPED_PATHS = [
     "/api/data/describe",
 ]
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("NIMBUS_MCP_E2E") != "1", reason="NIMBUS_MCP_E2E!=1"
-)
+pytestmark = pytest.mark.skipif(os.environ.get("NIMBUS_MCP_E2E") != "1", reason="NIMBUS_MCP_E2E!=1")
 
 
 def test_mapped_paths_exist_in_openapi():

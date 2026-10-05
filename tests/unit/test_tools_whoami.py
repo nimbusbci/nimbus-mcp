@@ -1,4 +1,4 @@
-"""whoami tool: profile passthrough + local JWT decode for token info."""
+"""account.whoami tool: profile passthrough + local JWT decode for token info."""
 
 import base64
 import json
@@ -11,7 +11,7 @@ from fastmcp import Client, FastMCP
 
 from nimbus_mcp.client import NimbusClient
 from nimbus_mcp.config import McpConfig
-from nimbus_mcp.tools import whoami
+from nimbus_mcp.tools import whoami as whoami_module
 
 
 def _b64url(obj: object) -> str:
@@ -46,7 +46,7 @@ def make_server(handler, *, token: str = "", meta: dict | None = None) -> FastMC
         credential_meta=meta if meta is not None else {},
     )
     server = FastMCP("t")
-    whoami.register(server, NimbusClient(cfg, transport=httpx.MockTransport(handler)))
+    whoami_module.register(server, NimbusClient(cfg, transport=httpx.MockTransport(handler)))
     return server
 
 
@@ -64,7 +64,7 @@ async def test_whoami_token_mode_full_payload():
     server = make_server(handler, token=token, meta={"source": "store", "name": "dev token"})
 
     async with Client(server) as c:
-        result = await c.call_tool("whoami", {})
+        result = await c.call_tool("account.whoami", {})
 
     assert seen == [("/api/me/profile", f"Bearer {token}")]
     data = result.data
@@ -94,7 +94,7 @@ async def test_whoami_pro_plan_reported():
         meta={"source": "env"},
     )
     async with Client(server) as c:
-        data = (await c.call_tool("whoami", {})).data
+        data = (await c.call_tool("account.whoami", {})).data
     assert data["plan"]["isPro"] is True
     assert data["freeRuns"] == {"monthlyLimit": None, "remaining": None}
     assert "name" not in data["token"]  # no store metadata in env mode
@@ -103,11 +103,9 @@ async def test_whoami_pro_plan_reported():
 
 async def test_whoami_local_key_mode_has_no_token_info():
     """X-MCP-Key modes carry no JWT — token is null; source reflects the meta."""
-    server = make_server(
-        lambda r: httpx.Response(200, json=_profile()), meta={"source": "desktop"}
-    )
+    server = make_server(lambda r: httpx.Response(200, json=_profile()), meta={"source": "desktop"})
     async with Client(server) as c:
-        data = (await c.call_tool("whoami", {})).data
+        data = (await c.call_tool("account.whoami", {})).data
     assert data["token"] is None
     assert data["source"] == "desktop"
 
@@ -119,6 +117,6 @@ async def test_whoami_token_without_exp_claims_omits_expiry():
         meta={"source": "token_file"},
     )
     async with Client(server) as c:
-        data = (await c.call_tool("whoami", {})).data
+        data = (await c.call_tool("account.whoami", {})).data
     # nothing displayable is known about the token → null rather than a stub
     assert data["token"] is None

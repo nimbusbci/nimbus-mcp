@@ -69,9 +69,7 @@ def test_key_file_only_resolution(tmp_path):
 
 def test_env_key_wins_over_key_file(tmp_path):
     key_file = _write_key_file(tmp_path, {"key": "from-file"})
-    cfg = load_config(
-        env={"NIMBUS_MCP_KEY": "from-env", "NIMBUS_MCP_KEY_FILE": str(key_file)}
-    )
+    cfg = load_config(env={"NIMBUS_MCP_KEY": "from-env", "NIMBUS_MCP_KEY_FILE": str(key_file)})
     assert cfg.mcp_key == "from-env"
 
 

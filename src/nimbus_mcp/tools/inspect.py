@@ -26,14 +26,14 @@ _HOSTED_LOCAL_MESSAGE = (
     "paths: inspecting the file directly is only possible against a local "
     "backend (desktop app / MCP local mode). An uploaded file still works "
     "anywhere — upload it and pass the returned relative path back to "
-    "inspect_file. Pick one of the options below and retry."
+    "data.inspect_file. Pick one of the options below and retry."
 )
 
 _HOSTED_LOCAL_OPTIONS: list[dict[str, str]] = [
     {
-        "action": "upload the file first (upload_data)",
-        "detail": "Call upload_data(file_path=...) and pass the relative path "
-        "it returns back to inspect_file(path=...) — that works on any "
+        "action": "upload the file first (data.upload)",
+        "detail": "Call data.upload(file_path=...) and pass the relative path "
+        "it returns back to data.inspect_file(path=...) — that works on any "
         "backend, and the registered upload path can also be used in "
         "pipelines (custom_data node).",
     },
@@ -47,7 +47,7 @@ _HOSTED_LOCAL_OPTIONS: list[dict[str, str]] = [
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="data.inspect_dataset", annotations=READ_ONLY)
     def inspect_dataset(
         dataset: str,
         subject: str | None = None,
@@ -61,14 +61,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         stratification choices (imbalanced classes skew accuracy), and
         flatlined channels mean a montage/reference problem worth fixing
         first. subject is REQUIRED (the backend 400s without it) — get the
-        subject list via list_datasets, e.g. "S01"; a comma-list like
+        subject list via catalog.datasets, e.g. "S01"; a comma-list like
         "S01,S03" loads a cohort. mode: training | evaluation | all.
         Units note: values are ASSUMED volts by the loader — a µV-native file
         reads 1e6x too large; set unitsScale in a pipeline's custom_data
         config when needed.
 
         Args:
-            dataset: Dataset id from list_datasets (e.g. "BNCI2014_001").
+            dataset: Dataset id from catalog.datasets (e.g. "BNCI2014_001").
             subject: REQUIRED subject code ("S01") or comma-list cohort ("S01,S03").
             mode: Which split to summarize — training | evaluation | all.
         """
@@ -77,7 +77,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             params["subject"] = subject
         return client.get("/api/data/describe", params=params)
 
-    @mcp.tool(annotations=READ_ONLY)
+    @mcp.tool(name="data.inspect_file", annotations=READ_ONLY)
     def inspect_file(path: str) -> dict[str, Any]:
         """Exploratory summary of an EEG file (.edf/.bdf/.mat/.csv/.tsv/.txt/.h5):
         channels, sampling rate, trial/class balance, per-channel µV stats,
@@ -85,7 +85,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
 
         The path shape picks the source: ABSOLUTE path → read the file from
         disk (only on a LOCAL backend: desktop app / MCP local mode — no
-        upload needed); RELATIVE path (the one upload_data returns) → describe
+        upload needed); RELATIVE path (the one data.upload returns) → describe
         the uploaded file, which works on ANY backend (hosted or local).
 
         Look at the data BEFORE building pipelines: class balance drives
@@ -98,7 +98,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
 
         Args:
             path: ABSOLUTE filesystem path (local backends only) or the RELATIVE
-                upload path returned by upload_data (works on any backend).
+                upload path returned by data.upload (works on any backend).
         """
         source = "local" if os.path.isabs(os.path.expanduser(path)) else "upload"
         try:

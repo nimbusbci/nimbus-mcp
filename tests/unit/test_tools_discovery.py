@@ -94,7 +94,7 @@ def make_server(handler) -> FastMCP:
 async def test_list_nodes_filters_category():
     server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
     async with Client(server) as c:
-        result = await c.call_tool("list_nodes", {"category": "model"})
+        result = await c.call_tool("catalog.nodes", {"category": "model"})
     ids = [n["id"] for n in result.data["nodes"]]
     assert ids == ["rxlda_sdk"]
 
@@ -102,7 +102,7 @@ async def test_list_nodes_filters_category():
 async def test_get_node_schema_returns_schema_and_ports():
     server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
     async with Client(server) as c:
-        result = await c.call_tool("get_node_schema", {"node_type": "rxlda_sdk"})
+        result = await c.call_tool("catalog.node_schema", {"node_type": "rxlda_sdk"})
     assert "iterations" in result.data["configSchema"]["properties"]
     assert result.data["ports"]["inputs"][0]["type"] == "2d_features"
 
@@ -111,13 +111,13 @@ async def test_get_node_schema_unknown_type_errors():
     server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
     async with Client(server) as c:
         with pytest.raises(Exception, match="Unknown node type"):
-            await c.call_tool("get_node_schema", {"node_type": "nope"})
+            await c.call_tool("catalog.node_schema", {"node_type": "nope"})
 
 
 async def test_list_templates_compact():
     server = make_server(lambda req: httpx.Response(200, json=TEMPLATES))
     async with Client(server) as c:
-        result = await c.call_tool("list_templates", {})
+        result = await c.call_tool("catalog.templates", {})
     assert result.data["templates"][0]["id"] == "mi_bciiv2a_csp_lda"
 
 
@@ -127,7 +127,7 @@ async def test_get_template_returns_train_graph():
         return httpx.Response(200, json=TEMPLATE_DETAIL)
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("get_template", {"template_id": "mi_bciiv2a_csp_lda"})
+        result = await c.call_tool("catalog.template", {"template_id": "mi_bciiv2a_csp_lda"})
     assert result.data["train"]["nodes"][0]["type"] == "public_data"
 
 
@@ -137,13 +137,13 @@ async def test_get_template_rejects_bad_template_id():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="Invalid template id"):
-            await c.call_tool("get_template", {"template_id": "../../api/admin"})
+            await c.call_tool("catalog.template", {"template_id": "../../api/admin"})
 
 
 async def test_list_datasets_on_disk_filter():
     server = make_server(lambda req: httpx.Response(200, json=DATASETS))
     async with Client(server) as c:
-        result = await c.call_tool("list_datasets", {})
+        result = await c.call_tool("catalog.datasets", {})
     ids = [d["id"] for d in result.data["datasets"]]
     assert ids == ["BNCI2014_001"]
     entry = result.data["datasets"][0]

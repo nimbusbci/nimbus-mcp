@@ -82,7 +82,7 @@ async def test_get_leaderboard_passes_payload_through_in_order():
         return httpx.Response(200, json=LEADERBOARD)
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("get_leaderboard", {})
+        result = await c.call_tool("catalog.leaderboard", {})
 
     assert seen["method"] == "GET"
     assert seen["path"] == "/api/leaderboard"

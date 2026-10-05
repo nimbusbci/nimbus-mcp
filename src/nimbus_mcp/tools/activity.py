@@ -2,7 +2,7 @@
 
 A streaming session registered here is stopped (stop-stream + disconnect via
 the caller's ``stop_fn``) when no activity has been noted for ``timeout_sec``.
-Activity is noted by ``stream_status`` and ``get_live_session`` polls, so any
+Activity is noted by ``stream.status`` and ``stream.telemetry`` polls, so any
 agent (or human UI) actively watching a session keeps it alive; an abandoned
 one is shut down instead of streaming from the user's head indefinitely.
 
@@ -39,9 +39,7 @@ def register_started(session_id: str, stop_fn: Callable[[], object], timeout_sec
     if timeout_sec is None or timeout_sec <= 0:
         return
     with _LOCK:
-        _SESSIONS[session_id] = _WatchState(
-            stop_fn=stop_fn, timeout_sec=float(timeout_sec)
-        )
+        _SESSIONS[session_id] = _WatchState(stop_fn=stop_fn, timeout_sec=float(timeout_sec))
     # Wake the checker so a fresh registration is observed promptly (and so a
     # checker mid-sleep on a stale interval re-reads CHECK_INTERVAL_SEC).
     _WAKE.set()
@@ -57,7 +55,7 @@ def note_activity(session_id: str) -> None:
 
 
 def unregister(session_id: str) -> None:
-    """Drop a session from the watchdog (idempotent; used by stop_stream)."""
+    """Drop a session from the watchdog (idempotent; used by stream.stop)."""
     with _LOCK:
         _SESSIONS.pop(session_id, None)
 

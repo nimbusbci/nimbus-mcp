@@ -25,9 +25,7 @@ _AUTH_HINT = (
 
 # Quota denials (run_pipeline / run_experiment 403s) that carry the pricing
 # deep-link; the single place the link is appended is _backend_error (v0.5 T5).
-_QUOTA_ERROR_CODES = frozenset(
-    {"FREEMIUM_MONTHLY_QUOTA_EXCEEDED", "RUNTIME_PAID_TIER_REQUIRED"}
-)
+_QUOTA_ERROR_CODES = frozenset({"FREEMIUM_MONTHLY_QUOTA_EXCEEDED", "RUNTIME_PAID_TIER_REQUIRED"})
 QUOTA_PRICING_URL = "https://studio.nimbusbci.com/pricing?reason=mcp-quota"
 
 
@@ -98,9 +96,7 @@ class NimbusClient:
     def post_bytes(self, path: str, json: dict[str, Any] | None = None) -> bytes:
         return self._request("POST", path, json=json, content=True)
 
-    def post_file(
-        self, path: str, file_path: Path, fields: dict[str, str] | None = None
-    ) -> Any:
+    def post_file(self, path: str, file_path: Path, fields: dict[str, str] | None = None) -> Any:
         """POST a multipart/form-data request with one ``file`` part plus text fields."""
         data_fields = dict(fields or {})
         try:

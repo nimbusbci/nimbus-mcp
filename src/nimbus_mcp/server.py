@@ -26,25 +26,27 @@ from .tools import (
 )
 
 INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
-0) Auth: whoami() shows the account, plan, quota, and (token mode) token expiry;
+0) Auth: account.whoami() shows the account, plan, quota, and (token mode) token expiry;
    if a tool returns {ok: false, setupRequired: true}, walk the user through the
    options in that payload (nimbus-mcp login / desktop app / NIMBUS_MCP_KEY).
-1) Explore: list_nodes / get_node_schema / list_templates / get_template / list_datasets;
-   get_leaderboard ranks benchmark pipelines per dataset (meanAccuracyPct desc) — pick
+1) Explore: catalog.nodes / catalog.node_schema / catalog.templates /
+   catalog.template / catalog.datasets;
+   catalog.leaderboard ranks benchmark pipelines per dataset (meanAccuracyPct desc) — pick
    templates by ranking there.
-1b) INSPECT BEFORE BUILDING: inspect_dataset(dataset, subject) or inspect_file(path)
+1b) INSPECT BEFORE BUILDING: data.inspect_dataset(dataset, subject) or data.inspect_file(path)
    show channels, class balance, flatlined channels, band powers — class balance
    drives stratification; units are ASSUMED volts (a µV-native CSV reads 1e6x
    large; set unitsScale in custom_data config when needed).
 2) Build: compose a train graph ({nodes: [{id, type, config}], connections: [{from, to}]}),
-   validate_pipeline it, then run_pipeline (non-blocking) and poll get_execution.
-3) Sweeps: run_experiment (1-25 paced runs, <=2 concurrent) then poll get_experiment for
+   pipeline.validate it, then execution.run (non-blocking) and poll execution.get.
+3) Sweeps: experiment.run (1-25 paced runs, <=2 concurrent) then poll experiment.get for
    per-run status and aggregated metrics (mean/std/best).
-4) Results: get_results (kappa, ITR, confusion matrix), list_artifacts / download_artifact,
-   export_python for a standalone zip.
-5) Live (use with care): list_devices, test_device, then start_stream(confirm=true) only with
+4) Results: execution.results (kappa, ITR, confusion matrix),
+   execution.artifacts / execution.download_artifact,
+   pipeline.export for a standalone zip.
+5) Live (use with care): device.list, device.test, then stream.start(confirm=true) only with
    the user's explicit go-ahead — it connects an EEG device to a human session. An idle
-   watchdog stops abandoned sessions; polling stream_status keeps them alive.
+   watchdog stops abandoned sessions; polling stream.status keeps them alive.
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 

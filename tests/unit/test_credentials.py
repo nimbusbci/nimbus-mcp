@@ -32,9 +32,7 @@ from nimbus_mcp.errors import McpToolError
 
 def _write_json(path: Path, payload: object) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8"
-    )
+    path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -71,9 +69,7 @@ def test_env_token_wins_over_everything(tmp_path):
         home=tmp_path,
         platform="darwin",
     )
-    assert cred == ResolvedCredential(
-        "token", DEFAULT_API_URL, "nimb_env", {"source": "env"}
-    )
+    assert cred == ResolvedCredential("token", DEFAULT_API_URL, "nimb_env", {"source": "env"})
 
 
 def test_token_file_beats_key_store_and_desktop(tmp_path):
@@ -120,9 +116,7 @@ def test_key_file_beats_store_and_desktop(tmp_path):
 
 def test_store_beats_desktop_and_supplies_api_url(tmp_path):
     _make_desktop_key(tmp_path, "darwin")
-    write_store(
-        token="nimb_stored", api_url="http://store.api/", name="my token", home=tmp_path
-    )
+    write_store(token="nimb_stored", api_url="http://store.api/", name="my token", home=tmp_path)
     cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
     assert cred.kind == "token"
     assert cred.secret == "nimb_stored"
@@ -187,9 +181,7 @@ def test_token_file_missing_raises(tmp_path):
 def test_token_file_wrong_shape_raises(tmp_path, payload):
     path = _write_json(tmp_path / "token.json", payload)
     with pytest.raises(McpToolError, match="Cannot read NIMBUS_TOKEN_FILE"):
-        resolve_credential(
-            env={"NIMBUS_TOKEN_FILE": str(path)}, home=tmp_path, platform="darwin"
-        )
+        resolve_credential(env={"NIMBUS_TOKEN_FILE": str(path)}, home=tmp_path, platform="darwin")
 
 
 def test_key_file_missing_raises(tmp_path):
@@ -207,9 +199,7 @@ def test_key_file_missing_raises(tmp_path):
 
 
 def test_store_roundtrip(tmp_path):
-    path = write_store(
-        token="nimb_x", api_url="http://api.test/", name="dev box", home=tmp_path
-    )
+    path = write_store(token="nimb_x", api_url="http://api.test/", name="dev box", home=tmp_path)
     assert path == tmp_path / ".nimbus" / "credentials.json"
     payload = read_store(home=tmp_path)
     assert payload is not None

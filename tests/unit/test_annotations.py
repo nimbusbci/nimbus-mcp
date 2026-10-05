@@ -48,12 +48,12 @@ def test_every_parameter_is_documented():
 def test_annotation_policy_invariants():
     tools = {t.name: t for t in _all_tools()}
     destructive = {n for n, t in tools.items() if t.annotations.destructive_hint}
-    assert destructive == {"cancel_execution", "stop_stream"}
+    assert destructive == {"execution.cancel", "stream.stop"}
     # The two rail-gated tools must not claim read-only.
-    assert tools["start_stream"].annotations.read_only_hint is False
-    assert tools["run_pipeline"].annotations.read_only_hint is False
+    assert tools["stream.start"].annotations.read_only_hint is False
+    assert tools["execution.run"].annotations.read_only_hint is False
     # Reads are idempotent (safe for clients to retry).
-    for name in ("whoami", "list_nodes", "get_results", "inspect_dataset"):
+    for name in ("account.whoami", "catalog.nodes", "execution.results", "data.inspect_dataset"):
         assert tools[name].annotations.read_only_hint is True
         assert tools[name].annotations.idempotent_hint is True
 
