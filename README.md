@@ -201,7 +201,7 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (32)
+## Tools (37)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
@@ -213,6 +213,8 @@ Campaigns: `experiment.run` (non-blocking, 1-25 paced runs), `experiment.get`
 Artifacts: `execution.artifacts`, `execution.download_artifact`, `pipeline.export`
 Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
 `stream.status`, `stream.telemetry`, `stream.stop`
+Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
+`calibration.pause`, `calibration.resume`, `calibration.train`
 Projects: `project.create`, `project.list`, `project.save`, `project.load`
 
 Not sure which pipeline to build? `catalog.leaderboard()` ranks benchmarked pipelines
@@ -319,6 +321,58 @@ window, signal quality (`meanChannelQuality`, `snrDb`, `artifactProbability`) an
 running stats — and warns when quality degrades. Each poll also resets the idle
 watchdog, so a session under active watch is never auto-stopped; an abandoned one
 is shut down after 15 minutes.
+
+## Calibrating a subject
+
+Guided calibration turns a person wearing the device into their own training
+data: a cue-guided session records labelled trials, and the agent then trains
+the subject's own classifier from the recording.
+
+> "Run a 10-trials-per-class MI calibration on my BrainBit, then train my
+> personal classifier when it's done."
+
+The five-tool flow (all non-blocking):
+
+```python
+# 1. Start (confirm-gated): fetches the paradigm's calibration template
+#    (mi / p300 / sart / target_hit), patches in device + trial count, and
+#    starts the session. The Studio app shows the cues on its calibration
+#    dashboard automatically.
+calibration.start(paradigm="mi", trials_per_class=10, confirm=true)
+# → {started: true, executionId: "…"}
+
+# 2. Poll: phase (baseline → imagery trials → complete), current trial, cue,
+#    progress tally, and an ETA estimate from the timing SSOT.
+calibration.status(execution_id="…")
+# → {phase: "imagery", currentTrial: {index: 7, total: 20, class: "Left Hand",
+#    cue: "← LEFT"}, progress: {trialsDone: 6, …}, estimatedRemainingSec: 105.0, …}
+
+# 3./4. Pacing between trials (cues hold; resume anytime).
+calibration.pause(execution_id="…")   # calibration.resume(...) to continue
+
+# 5. When phase == "complete" the snapshot carries the recording:
+#    calibration: {uploadId, path, filename, format}. Train from it.
+calibration.train(execution_id="…")
+# → {trainExecutionId: "…", calibrationUploadId: "…"} → poll execution.get,
+#    then execution.results for the metrics (kappa, accuracy, …).
+```
+
+`mi` trains on the default `mi_headband_csp_lda` template (CAR → 8-30 Hz
+bandpass → CSP → LDA); `p300` / `sart` / `target_hit` have no default train
+template — pass an explicit `template_id` (from `catalog.templates`) or your
+own `train_graph` to `calibration.train`. Either way the first data node is
+rewired onto the recorded upload (`custom_data` source pinned to the
+`uploadId`), preserving the template's training config.
+
+`calibration.start` refuses to run without `confirm=true` — like `stream.start`,
+the device goes on a human's head; call `device.test` first.
+
+Pro plan required — calibration workflows and custom-data training are
+freemium-gated (free-tier requests are 403 by the node policy).
+
+The calibrate→train handoff requires a Postgres-backed backend (hosted or local
+dev): a desktop-local session completes and records, but its upload can't be
+resolved by MCP train today.
 
 ## Safety
 

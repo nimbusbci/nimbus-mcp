@@ -26,7 +26,9 @@ def _make_server():
 
 
 def _all_tools():
-    return asyncio.get_event_loop().run_until_complete(_make_server().list_tools())
+    # asyncio.run (not get_event_loop): the deprecated loop getter breaks when
+    # this file runs after async test files that close their loop.
+    return asyncio.run(_make_server().list_tools())
 
 
 def test_every_tool_has_annotations():
@@ -52,6 +54,18 @@ def test_annotation_policy_invariants():
     # The two rail-gated tools must not claim read-only.
     assert tools["stream.start"].annotations.read_only_hint is False
     assert tools["execution.run"].annotations.read_only_hint is False
+    # Calibration lifecycle: start/train/pause/resume mutate, status is a read.
+    cal_mutating = (
+        "calibration.start",
+        "calibration.train",
+        "calibration.pause",
+        "calibration.resume",
+    )
+    for name in cal_mutating:
+        assert tools[name].annotations.read_only_hint is False
+        assert tools[name].annotations.destructive_hint is False
+    assert tools["calibration.status"].annotations.read_only_hint is True
+    assert tools["calibration.status"].annotations.idempotent_hint is True
     # Reads are idempotent (safe for clients to retry).
     for name in ("account.whoami", "catalog.nodes", "execution.results", "data.inspect_dataset"):
         assert tools[name].annotations.read_only_hint is True
@@ -61,4 +75,4 @@ def test_annotation_policy_invariants():
 def test_tool_count_is_tracked():
     # A new tool must update this number AND pass the suites above — the count
     # is asserted so additions are conscious.
-    assert len(_all_tools()) == 32
+    assert len(_all_tools()) == 37

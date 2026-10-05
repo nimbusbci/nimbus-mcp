@@ -13,6 +13,7 @@ from .setup_mode import SetupRequired
 from .tools import (
     artifacts,
     build,
+    calibration,
     campaign,
     data,
     discovery,
@@ -47,6 +48,9 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
 5) Live (use with care): device.list, device.test, then stream.start(confirm=true) only with
    the user's explicit go-ahead — it connects an EEG device to a human session. An idle
    watchdog stops abandoned sessions; polling stream.status keeps them alive.
+6) Personal calibration: calibration.start(confirm=true) while the subject wears the device —
+   the Studio app shows cues; calibration.status polls; calibration.train turns the recording
+   into the subject's own classifier.
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 
@@ -92,6 +96,7 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
         leaderboard,
         build,
         run,
+        calibration,
         campaign,
         artifacts,
         live,
