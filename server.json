@@ -3,7 +3,7 @@
   "name": "io.github.nimbusbci/nimbus-mcp",
   "title": "Nimbus BCI",
   "description": "AI agents build, train, and analyze BCI/EEG pipelines: data, models, experiments, live sessions.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "repository": {
     "url": "https://github.com/nimbusbci/nimbus-mcp",
     "source": "github"
@@ -12,14 +12,14 @@
     {
       "registryType": "pypi",
       "identifier": "nimbus-mcp",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "NIMBUS_API_URL",
-          "description": "Nimbus backend URL. Defaults to the hosted Nimbus Studio (https://nimbus-studio.fly.dev); use http://127.0.0.1:8080 for a local backend or the desktop app.",
+          "description": "Nimbus backend URL. Defaults to the local backend (http://127.0.0.1:8080) — the desktop app and local key flow expect this; use https://nimbus-studio.fly.dev to run against the hosted API.",
           "isRequired": false,
           "format": "string",
           "isSecret": false

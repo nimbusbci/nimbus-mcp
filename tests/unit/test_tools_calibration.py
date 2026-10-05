@@ -180,7 +180,7 @@ async def test_start_patches_device_and_trials():
                 "paradigm": "mi",
                 "confirm": True,
                 "device_type": "brainbit",
-                "trials_per_class": 3,
+                "trials_per_class": 5,
                 "name": "smoke",
             },
         )
@@ -193,13 +193,13 @@ async def test_start_patches_device_and_trials():
     assert nodes["device"]["type"] == "hardware_device"
     assert nodes["device"]["config"]["deviceType"] == "brainbit"
     assert nodes["device"]["config"]["buildMode"] == "live_record"
-    assert nodes["protocol"]["config"]["trialsPerClass"] == 3
+    assert nodes["protocol"]["config"]["trialsPerClass"] == 5
     assert body["layout"]["nodes"]
     assert set(body["layout"]["nodes"]) == {"device", "protocol", "recorder"}
     assert body["name"] == "smoke"
     assert result.data["started"] is True and result.data["executionId"] == "exec_1"
-    # trialsPlanned = patched trialsPerClass (3) x len(template classes) (1).
-    assert result.data["trialsPlanned"] == 3
+    # trialsPlanned = patched trialsPerClass (5) x len(template classes) (1).
+    assert result.data["trialsPlanned"] == 5
 
 
 async def test_start_reports_trials_planned_from_template():
@@ -215,6 +215,55 @@ async def test_start_reports_trials_planned_from_template():
     async with Client(make_server(handler)) as c:
         result = await c.call_tool("calibration.start", {"paradigm": "mi", "confirm": True})
     assert result.data["trialsPlanned"] == 40  # 40 trialsPerClass x 1 template class
+
+
+async def test_start_with_train_only_template_fallback():
+    """Backend serving calibration graph in 'train' section (desktop app builds) works."""
+    template_without_calibrate = {
+        "template": {
+            "id": "mi_hardware_calibration",
+            "name": "MI hardware calibration",
+            "version": "3",
+            "train": PARADIGM_TEMPLATE["template"]["calibrate"],
+            "layout": {
+                "nodes": {
+                    "device": {"x": 0.0, "y": 80.0},
+                    "protocol": {"x": 380.0, "y": 80.0},
+                    "recorder": {"x": 760.0, "y": 80.0},
+                }
+            },
+        }
+    }
+    seen: dict[str, httpx.Request] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen[req.url.path] = req
+        if req.url.path == "/api/templates/mi_hardware_calibration":
+            return httpx.Response(200, json=template_without_calibrate)
+        if req.url.path == "/api/execute":
+            return httpx.Response(200, json={"ok": True, "executionId": "exec_1"})
+        raise AssertionError(req.url.path)
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool(
+            "calibration.start",
+            {"paradigm": "mi", "confirm": True, "trials_per_class": 5},
+        )
+    assert result.data["started"] is True
+    assert result.data["executionId"] == "exec_1"
+    body = json.loads(seen["/api/execute"].read())
+    assert body["stage"] == "calibrate"
+    assert len(body["train"]["nodes"]) == 3
+    assert body["layout"]["nodes"]["device"] == {"x": 0.0, "y": 80.0}
+
+
+async def test_start_refuses_low_trials_per_class():
+    async with Client(make_server(lambda r: None)) as c:
+        with pytest.raises(Exception, match="at least 5"):
+            await c.call_tool(
+                "calibration.start",
+                {"paradigm": "mi", "confirm": True, "trials_per_class": 3},
+            )
 
 
 async def test_status_merges_complete_upload():

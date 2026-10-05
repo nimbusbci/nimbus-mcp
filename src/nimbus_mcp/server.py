@@ -1,4 +1,4 @@
-"""FastMCP server assembly: one client, twelve tool modules, stdio transport."""
+"""FastMCP server assembly: one client, thirteen tool modules, stdio transport."""
 
 from __future__ import annotations
 

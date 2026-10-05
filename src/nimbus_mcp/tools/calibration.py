@@ -80,7 +80,12 @@ def _graph_section(template: dict[str, Any], section: str, template_id: str) -> 
     """
     raw = template.get(section)
     if not isinstance(raw, dict) or not raw.get("nodes"):
-        raise McpToolError(f"Template '{template_id}' has no {section} graph section.")
+        if section == "calibrate":
+            # Some backend builds (e.g. desktop distribution) store calibration
+            # graphs in the template's primary 'train' section.
+            raw = template.get("train")
+        if not isinstance(raw, dict) or not raw.get("nodes"):
+            raise McpToolError(f"Template '{template_id}' has no {section} graph section.")
     return {
         "nodes": [n for n in (raw.get("nodes") or []) if isinstance(n, dict)],
         "connections": [c for c in (raw.get("connections") or []) if isinstance(c, dict)],
@@ -122,7 +127,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Args:
             paradigm: mi | p300 | sart | target_hit.
             confirm: MUST be true — explicit user go-ahead for a session on their head.
-            trials_per_class: Override the template's trial count (e.g. 3 for smoke tests).
+            trials_per_class: Override the template's trial count (minimum 5).
             classes: Override class list [{id,label,cue}] (MI default: left/right hand).
             name: Display name recorded on the execution.
             device_type: Device id from device.list (omit → template default synthetic).
@@ -141,6 +146,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "message": "Refusing to start calibration: pass confirm=true "
                 "(a device session on a human). Call device.test first.",
             }
+        if trials_per_class is not None and trials_per_class < 5:
+            raise McpToolError(
+                f"trials_per_class must be at least 5 (protocol minimum; got {trials_per_class})."
+            )
         template_id = PARADIGM_TEMPLATES.get(paradigm)
         if template_id is None:
             raise McpToolError(
@@ -188,8 +197,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "train": graph,
             "stage": "calibrate",
             # The calibrate section's own canvas layout travels inside the
-            # section (verbatim from the template yaml).
-            "layout": _layout_or_none(template.get("calibrate", {}).get("layout"))
+            # section (verbatim from the template yaml), or top-level layout.
+            "layout": _layout_or_none((template.get("calibrate") or {}).get("layout"))
+            or _layout_or_none(template.get("layout"))
             or synth_layout(graph),
         }
         if name is not None:
