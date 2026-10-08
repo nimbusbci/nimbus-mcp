@@ -8,7 +8,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import NimbusClient
-from ._annotations import READ_ONLY
+from ._annotations import LOCAL_WRITE, READ_ONLY
 from ._guards import safe_segment
 
 
@@ -35,7 +35,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             ],
         }
 
-    @mcp.tool(name="execution.download_artifact", annotations=READ_ONLY)
+    @mcp.tool(name="execution.download_artifact", annotations=LOCAL_WRITE)
     def download_artifact(execution_id: str, artifact_name: str) -> dict[str, Any]:
         """Download one artifact file to NIMBUS_EXPORT_DIR/executions/<id>/ and return its path.
 
@@ -52,7 +52,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         dest.write_bytes(data)
         return {"path": str(dest), "size": len(data)}
 
-    @mcp.tool(name="pipeline.export", annotations=READ_ONLY)
+    @mcp.tool(name="pipeline.export", annotations=LOCAL_WRITE)
     def export_python(train_graph: dict[str, Any], name: str | None = None) -> dict[str, Any]:
         """Export the pipeline as a standalone runnable Python bundle (zip saved locally).
 

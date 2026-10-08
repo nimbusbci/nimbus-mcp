@@ -4,6 +4,7 @@
 
 <!-- smithery badge: their /badge/ endpoint 500s platform-wide (2026-10-07); shields.io image + link keeps the badge rendering -->
 [![smithery badge](https://img.shields.io/badge/smithery-nimbusbci%2Fnimbus--mcp-2EA043)](https://smithery.ai/servers/nimbusbci/nimbus-mcp)
+[![M8ven Verified](https://m8ven.ai/badge/mcp/nimbusbci-nimbus-mcp-1xjm62?variant=verified&v=01611e09ab598e1f20772a0fc6bd1b96)](https://m8ven.ai/mcp/nimbusbci-nimbus-mcp-1xjm62?s=readme)
 
 MCP server that lets AI agents (Claude Code, Cursor, Claude Desktop) build, validate,
 run, and analyze Nimbus BCI pipelines — upload their own EEG data, persist pipelines

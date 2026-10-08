@@ -70,6 +70,18 @@ def test_annotation_policy_invariants():
     for name in ("account.whoami", "catalog.nodes", "execution.results", "data.inspect_dataset"):
         assert tools[name].annotations.read_only_hint is True
         assert tools[name].annotations.idempotent_hint is True
+    # Local-write tools (downloads/exports into NIMBUS_EXPORT_DIR) change no
+    # backend state but DO write the local environment, so they must not claim
+    # readOnlyHint (m8ven annotation audit 2026-10-08); retry-safe.
+    for name in (
+        "execution.download_artifact",
+        "pipeline.export",
+        "bids.export_dataset",
+        "bids.export_execution",
+    ):
+        assert tools[name].annotations.read_only_hint is False
+        assert tools[name].annotations.destructive_hint is False
+        assert tools[name].annotations.idempotent_hint is True
 
 
 def test_tool_count_is_tracked():

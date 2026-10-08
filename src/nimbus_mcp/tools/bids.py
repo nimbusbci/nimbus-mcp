@@ -10,7 +10,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
-from ._annotations import READ_ONLY
+from ._annotations import LOCAL_WRITE
 from ._guards import safe_segment
 
 
@@ -49,7 +49,7 @@ def _save_zip(data: bytes, safe_stem: str, export_dir: Path) -> dict[str, Any]:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="bids.export_dataset", annotations=READ_ONLY)
+    @mcp.tool(name="bids.export_dataset", annotations=LOCAL_WRITE)
     def export_dataset(
         dataset: str,
         subjects: list[str] | None = None,
@@ -83,7 +83,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         safe_stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in dataset)[:80]
         return _save_zip(data, safe_stem, client.config.export_dir)
 
-    @mcp.tool(name="bids.export_execution", annotations=READ_ONLY)
+    @mcp.tool(name="bids.export_execution", annotations=LOCAL_WRITE)
     def export_execution(execution_id: str) -> dict[str, Any]:
         """Export an execution's results as a BIDS-derivative zip (metrics.json,
         per-subject participants.tsv, protocol.json, full pipeline_snapshot.json,
