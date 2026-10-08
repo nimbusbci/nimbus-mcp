@@ -1,6 +1,6 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.9.1
+Version: 0.9.2
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
@@ -477,8 +477,8 @@ returns the same shape, including how many days ago it expired and a
 ```
 account.whoami() → {userId, email, plan: {isPro, pioneerAccess},
             freeRuns: {monthlyLimit, remaining},
-            token: {name, expiresAt, daysLeft} | null,   # hosted-token mode only
-            source}                                      # store | env | token_file | …
+            token: {name, expiresAt, daysLeft} | {masked} | null,  # {masked} = gateway header token
+            source}                                      # store | env | token_file | header | …
 ```
 
 Call `account.whoami()` from the agent to see the account, plan, this month's free-run
@@ -559,8 +559,12 @@ stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
 ```bash
-nimbus-mcp serve --host 0.0.0.0 --port 8080   # env: NIMBUS_MCP_HOST/PORT/PATH
+nimbus-mcp serve --port 8080   # env: NIMBUS_MCP_HOST/PORT/PATH
 ```
+
+The gateway binds **127.0.0.1 by default** — exposing it (`--host 0.0.0.0`)
+is explicit opt-in; combine that with the per-request tokens below (the
+gateway itself holds no credential to gate access with).
 
 The gateway holds **no** credential itself: each request's Nimbus API token
 arrives as a header, so one shared deployment serves many users as

@@ -29,6 +29,8 @@ from typing import Any
 
 import httpx
 
+from .client import _mask_secret
+from .config import DEFAULT_SERVE_HOST
 from .credentials import (
     DEFAULT_API_URL,
     ResolvedCredential,
@@ -45,8 +47,6 @@ TTL_DAYS_MAX = 90
 
 # Overall login give-up bound: the grant TTL plus slack for one slow poll.
 LOGIN_TIMEOUT_SLACK_SECONDS = 120
-
-_SECRET_PREFIX_LEN = 12
 
 _KNOWN_COMMANDS = ("login", "logout", "status", "serve")
 
@@ -77,7 +77,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .server import serve as serve_server
 
     serve_server(
-        host=args.host or os.environ.get("NIMBUS_MCP_HOST") or "0.0.0.0",
+        host=args.host or os.environ.get("NIMBUS_MCP_HOST") or DEFAULT_SERVE_HOST,
         port=args.port or int(os.environ.get("NIMBUS_MCP_PORT") or 8080),
         path=args.path or os.environ.get("NIMBUS_MCP_PATH") or "/mcp",
     )
@@ -126,12 +126,18 @@ def _build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser(
         "serve",
         help="run the MCP server over streamable HTTP (hosted gateway mode)",
+        description=(
+            "Hosted gateway: streamable HTTP with per-request credentials. "
+            "Binds 127.0.0.1 by default — binding 0.0.0.0 to expose the "
+            "gateway is explicit opt-in; combine it with per-request tokens "
+            "(X-Nimbus-Token headers)."
+        ),
     )
     serve.add_argument(
         "--host",
         default=None,
         metavar="ADDR",
-        help="bind address (default: env NIMBUS_MCP_HOST, else 0.0.0.0)",
+        help="bind address (default: env NIMBUS_MCP_HOST, else 127.0.0.1)",
     )
     serve.add_argument(
         "--port",
@@ -292,11 +298,8 @@ def cmd_status(
     print(f"api url: {cred.api_url}")
     if cred.secret:
         label = "token" if cred.kind == "token" else "key"
-        # A secret shorter than the 12-char prefix would be printed WHOLE by a
-        # naive slice — those get a 4-char prefix instead (still identifiable,
-        # never reconstructable).
-        prefix_len = _SECRET_PREFIX_LEN if len(cred.secret) > _SECRET_PREFIX_LEN else 4
-        print(f"{label} prefix: {cred.secret[:prefix_len]}…")
+        # The shared mask never prints the whole secret (see client._mask_secret).
+        print(f"{label} prefix: {_mask_secret(cred.secret)}")
     if cred.kind == "none":
         print(
             "No Nimbus credential found. Run `nimbus-mcp login`, or set "

@@ -82,23 +82,30 @@ class ExperimentState:
 
 
 class Experiments:
-    """Thread-safe process-local registry of experiment states."""
+    """Thread-safe process-local registry of experiment states.
+
+    Entries are keyed by ``"<credential fingerprint>:<experiment_id>"``: the
+    registry lives in one process, and a hosted gateway authenticates many
+    users per process — keying by the bare id would let any authenticated
+    gateway user read another user's experiment snapshot by id. The scoping
+    is internal: experiment.run still returns the plain experiment_id, and
+    experiment.get recomputes the caller's key from its own credential."""
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self._states: dict[str, ExperimentState] = {}
 
-    def add(self, state: ExperimentState) -> None:
-        with self.lock:
-            self._states[state.experiment_id] = state
+    @staticmethod
+    def key(fingerprint: str, experiment_id: str) -> str:
+        return f"{fingerprint}:{experiment_id}"
 
-    def get(self, experiment_id: str) -> ExperimentState | None:
+    def add(self, state: ExperimentState, fingerprint: str) -> None:
         with self.lock:
-            return self._states.get(experiment_id)
+            self._states[self.key(fingerprint, state.experiment_id)] = state
 
-    def snapshot(self, experiment_id: str) -> dict[str, Any] | None:
+    def snapshot(self, fingerprint: str, experiment_id: str) -> dict[str, Any] | None:
         with self.lock:
-            state = self._states.get(experiment_id)
+            state = self._states.get(self.key(fingerprint, experiment_id))
             return None if state is None else state.payload()
 
 
@@ -308,7 +315,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             runs=prepared,
             max_in_flight=max(1, min(max_concurrent, MAX_IN_FLIGHT)),
         )
-        EXPERIMENTS.add(state)
+        # Scope the registry entry to the calling credential BEFORE
+        # registering/spawning: the fingerprint must be captured here, inside
+        # the request (the worker thread has no MCP request context to resolve
+        # a per-request token in — it only mutates the state object, never the
+        # registry key). The id returned to the caller stays plain.
+        fingerprint = client.credential_fingerprint()
+        EXPERIMENTS.add(state, fingerprint)
         # Bind BEFORE spawning: the worker thread has no MCP request context
         # (fastmcp's header lookup answers {} there), so a request-scoped
         # client — the hosted gateway — cannot resolve its per-request token
@@ -343,7 +356,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # confusing "Unknown experiment".
         client.ensure_ready()
         exp_id = safe_segment(experiment_id, label="experiment id")
-        snapshot = EXPERIMENTS.snapshot(exp_id)
+        # The caller's own key only: another credential's experiment with the
+        # same id is indistinguishable from a foreign-process one.
+        snapshot = EXPERIMENTS.snapshot(client.credential_fingerprint(), exp_id)
         if snapshot is None:
             raise McpToolError(
                 f"Unknown experiment '{exp_id}'. It was run in another MCP server "

@@ -120,3 +120,35 @@ async def test_whoami_token_without_exp_claims_omits_expiry():
         data = (await c.call_tool("account.whoami", {})).data
     # nothing displayable is known about the token → null rather than a stub
     assert data["token"] is None
+
+
+async def test_whoami_gateway_reports_header_token_and_source():
+    """Truthful whoami on the hosted gateway: a header-token call reports
+    source "header" and the MASKED token — never the raw secret — instead of
+    the base config's `token: null, source: env` misreport."""
+    from nimbus_mcp.client import _mask_secret
+    from nimbus_mcp.hosted import HeaderCredentialClient
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        # The per-request credential really carried the call…
+        assert req.headers.get("authorization") == "Bearer nimb_gateway_token"
+        return httpx.Response(200, json=_profile())
+
+    base = McpConfig(api_url="http://t", mcp_key="", export_dir=Path("/tmp/nx"))
+    gateway = HeaderCredentialClient(
+        base,
+        client_factory=lambda cfg: NimbusClient(cfg, transport=httpx.MockTransport(handler)),
+        headers_getter=lambda: {"x-nimbus-token": "nimb_gateway_token"},
+    )
+    server = FastMCP("t")
+    whoami_module.register(server, gateway)
+
+    async with Client(server) as c:
+        data = (await c.call_tool("account.whoami", {})).data
+
+    assert data["source"] == "header"
+    assert data["token"] == {"masked": _mask_secret("nimb_gateway_token")}
+    # …and the raw secret never appears — not even a reconstructable prefix
+    # beyond the mask itself.
+    dumped = json.dumps(data)
+    assert "nimb_gateway_token" not in dumped

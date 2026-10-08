@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,25 @@ _QUOTA_ERROR_CODES = frozenset(
     {"nimbus.freemium.monthly_quota_exceeded", "nimbus.runtime.paid_tier_required"}
 )
 QUOTA_PRICING_URL = "https://studio.nimbusbci.com/pricing?reason=mcp-quota"
+
+_SECRET_PREFIX_LEN = 12
+
+
+def _mask_secret(secret: str) -> str:
+    """``nimb_abcdef…`` — a 12-char prefix so a printed secret stays
+    identifiable but never reconstructable. A secret within the prefix window
+    would be printed WHOLE by a naive slice — those get a 4-char prefix
+    instead. Shared by the CLI status doctor and ``credential_report()``."""
+    prefix_len = _SECRET_PREFIX_LEN if len(secret) > _SECRET_PREFIX_LEN else 4
+    return f"{secret[:prefix_len]}…"
+
+
+def _credential_fingerprint(secret: str) -> str:
+    """sha256 hex[:16] of a token/key — an opaque, stable-per-credential scope
+    key for process-local state (campaign's experiment registry), so one
+    shared gateway's users cannot see each other's state. Never displayed:
+    unreversible, but it exists to be compared, not shown."""
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()[:16]
 
 
 class NimbusClient:
@@ -81,6 +101,25 @@ class NimbusClient:
         credentials attached, so this is a no-op; :class:`NullClient` raises
         :class:`SetupRequired` instead."""
         return None
+
+    def credential_report(self) -> dict[str, Any]:
+        """Identity of the credential this client sends, for display
+        (``account.whoami``): where it came from and the masked secret —
+        never the raw token/key."""
+        secret = self.config.nimbus_token or self.config.mcp_key
+        return {
+            "source": self.config.credential_meta.get("source") or "env",
+            "token": _mask_secret(secret) if secret else None,
+        }
+
+    def credential_fingerprint(self) -> str:
+        """Stable id of the credential this client authenticates with — the
+        scope key for process-local state (see
+        :func:`_credential_fingerprint`), so state registered under one
+        credential is invisible under another. The constructor guarantees a
+        secret, so ``"anon"`` is unreachable in practice."""
+        secret = self.config.nimbus_token or self.config.mcp_key
+        return _credential_fingerprint(secret) if secret else "anon"
 
     def _auth_rejection(self, status: int) -> McpToolError:
         """The exception for a 401 (see _request).
@@ -224,6 +263,18 @@ class NullClient:
 
     def _setup_required(self) -> SetupRequired:
         return SetupRequired(self._guidance)
+
+    def credential_report(self) -> dict[str, Any]:
+        """Setup-mode counterpart of :meth:`NimbusClient.credential_report`:
+        no credential was resolved, so there is nothing to identify."""
+        return {"source": None, "token": None}
+
+    def credential_fingerprint(self) -> str:
+        """Setup-mode counterpart of
+        :meth:`NimbusClient.credential_fingerprint`: no credential resolved,
+        so the anonymous scope. Campaign tools never reach it — their
+        ``ensure_ready()`` preflight raises the setup guidance first."""
+        return "anon"
 
     def ensure_ready(self) -> None:
         """Preflight counterpart of :meth:`NimbusClient.ensure_ready`: no

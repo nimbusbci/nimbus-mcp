@@ -254,3 +254,24 @@ def test_bound_client_yields_self_and_never_closes():
         assert bound is client
     # Still usable after the context exits — a closed httpx client would raise.
     assert client.get("/api/anything") == {"ok": True}
+
+
+def test_credential_report_token_mode_masked_with_meta_source():
+    """credential_report: the source comes from the credential meta (store /
+    env / token_file …) and the token is the shared 12-char mask — never the
+    raw secret."""
+    cfg = McpConfig(
+        api_url="http://test",
+        mcp_key="",
+        export_dir=Path("/tmp/nx"),
+        nimbus_token="nimb_reported_token",
+        credential_meta={"source": "store"},
+    )
+    c = NimbusClient(cfg, transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    assert c.credential_report() == {"source": "store", "token": "nimb_reporte…"}
+
+
+def test_credential_report_key_mode_defaults_source_env():
+    """Key mode reports the masked mcp_key; no meta → source "env"."""
+    c = make_client(lambda r: httpx.Response(200, json={}))
+    assert c.credential_report() == {"source": "env", "token": "k…"}

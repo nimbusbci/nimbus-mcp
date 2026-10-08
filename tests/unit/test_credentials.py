@@ -162,9 +162,14 @@ def test_desktop_key_without_port_keeps_default_api_url(tmp_path):
 
 
 def test_env_api_url_beats_desktop_key_port(tmp_path):
+    """Remote env URL + desktop key needs the explicit override now (the
+    refusal itself is covered below) — with it, the env URL still wins over
+    the key file's port."""
     _write_desktop_key(tmp_path, {"key": "desk-key", "port": 8081})
     cred = resolve_credential(
-        env={"NIMBUS_API_URL": "https://hosted.api"}, home=tmp_path, platform="darwin"
+        env={"NIMBUS_API_URL": "https://hosted.api", "NIMBUS_ALLOW_REMOTE_MCP_KEY": "1"},
+        home=tmp_path,
+        platform="darwin",
     )
     assert cred.api_url == "https://hosted.api"
 
@@ -438,3 +443,176 @@ def test_write_store_surfaces_write_error_not_double_close(tmp_path, monkeypatch
     monkeypatch.setattr(os, "fdopen", lambda fd, *a, **k: FailingFile(fd))
     with pytest.raises(OSError, match="disk full"):
         write_store(token="nimb_x", api_url="http://t", home=tmp_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NIMBUS_API_URL override warning + local-key remote guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_env_api_url_override_of_store_warns_naming_both_hosts(tmp_path, capsys):
+    """The store token was minted for one origin but NIMBUS_API_URL sends it
+    to another: exactly ONE warning line naming both hosts (the token would
+    be sent to the env host)."""
+    write_store(token="nimb_stored", api_url="https://store.example.com", home=tmp_path)
+    cred = resolve_credential(
+        env={"NIMBUS_API_URL": "https://env.example.com"}, home=tmp_path, platform="darwin"
+    )
+    assert cred.kind == "token"
+    assert cred.api_url == "https://env.example.com"
+    text = capsys.readouterr().err
+    lines = [line for line in text.splitlines() if "env.example.com" in line]
+    assert len(lines) == 1  # one line, not a wall of noise
+    assert "store.example.com" in lines[0]
+    assert "env.example.com" in lines[0]
+
+
+def test_env_api_url_port_difference_is_an_origin_mismatch(tmp_path, capsys):
+    """Same host, different port = different origin → still warned (the token
+    would cross to another listener)."""
+    write_store(token="nimb_stored", api_url="https://api.example.com", home=tmp_path)
+    resolve_credential(
+        env={"NIMBUS_API_URL": "https://api.example.com:8443"}, home=tmp_path, platform="darwin"
+    )
+    assert "api.example.com:8443" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad_side", ["store", "env"], ids=["store-bad-port", "env-bad-port"])
+def test_env_api_url_override_warning_survives_bad_port(tmp_path, capsys, bad_side):
+    """A non-numeric port on either side of the override check must not crash
+    token-mode startup: ``urlsplit`` itself does not raise (``.port`` does,
+    lazily), so the check sees differing origins and the warning prints with a
+    degraded host label — resolution continues with the env URL."""
+    store_api = "https://store.example.com:badport" if bad_side == "store" else "https://store.example.com"
+    env_api = "https://env.example.com" if bad_side == "store" else "https://env.example.com:badport"
+    write_store(token="nimb_stored", api_url=store_api, home=tmp_path)
+    cred = resolve_credential(env={"NIMBUS_API_URL": env_api}, home=tmp_path, platform="darwin")
+    assert cred.kind == "token"
+    assert cred.secret == "nimb_stored"
+    assert cred.api_url == env_api
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "store.example.com" in err
+    assert "env.example.com" in err
+
+
+def test_env_api_url_same_origin_different_path_no_warning(tmp_path, capsys):
+    """Same origin (scheme/host/port), different path — no warning."""
+    write_store(token="nimb_stored", api_url="https://api.example.com/v1", home=tmp_path)
+    cred = resolve_credential(
+        env={"NIMBUS_API_URL": "https://api.example.com/v2"}, home=tmp_path, platform="darwin"
+    )
+    assert cred.api_url == "https://api.example.com/v2"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_env_api_url_without_store_no_warning(tmp_path, capsys):
+    """Nothing was recorded at login → an env URL is just configuration, not
+    an override of a minted-for origin."""
+    cred = resolve_credential(
+        env={"NIMBUS_API_URL": "https://env.example.com"}, home=tmp_path, platform="darwin"
+    )
+    assert cred.kind == "none"
+    assert capsys.readouterr().err == ""
+
+
+def test_mcp_key_to_remote_api_url_refused(tmp_path):
+    """The local X-MCP-Key authenticates a loopback backend only; resolving a
+    config that would send it to a non-loopback host raises, naming the
+    override for the rare deliberate case."""
+    with pytest.raises(McpToolError, match="NIMBUS_ALLOW_REMOTE_MCP_KEY"):
+        resolve_credential(
+            env={"NIMBUS_MCP_KEY": "k", "NIMBUS_API_URL": "https://api.example.com"},
+            home=tmp_path,
+            platform="darwin",
+        )
+
+
+def test_mcp_key_to_remote_api_url_bad_port_raises_crafted_error_not_valueerror(tmp_path):
+    """``urlsplit`` does not raise on a bad port — ``.port`` does, lazily.
+    Building the refusal message must not turn the crafted McpToolError into
+    a raw ValueError traceback; the message still names the host."""
+    with pytest.raises(McpToolError, match="NIMBUS_ALLOW_REMOTE_MCP_KEY") as exc_info:
+        resolve_credential(
+            env={"NIMBUS_MCP_KEY": "k", "NIMBUS_API_URL": "http://api.example.com:badport"},
+            home=tmp_path,
+            platform="darwin",
+        )
+    assert not isinstance(exc_info.value, ValueError)
+    assert "api.example.com" in str(exc_info.value)
+
+
+def test_mcp_key_file_to_remote_api_url_refused(tmp_path):
+    key_file = _write_json(tmp_path / "key.json", {"key": "file-key"})
+    with pytest.raises(McpToolError, match="non-loopback"):
+        resolve_credential(
+            env={"NIMBUS_MCP_KEY_FILE": str(key_file), "NIMBUS_API_URL": "http://10.0.0.5:8080"},
+            home=tmp_path,
+            platform="darwin",
+        )
+
+
+def test_mcp_key_to_remote_allowed_with_explicit_override(tmp_path):
+    cred = resolve_credential(
+        env={
+            "NIMBUS_MCP_KEY": "k",
+            "NIMBUS_API_URL": "https://api.example.com",
+            "NIMBUS_ALLOW_REMOTE_MCP_KEY": "1",
+        },
+        home=tmp_path,
+        platform="darwin",
+    )
+    assert cred.kind == "key"
+    assert cred.api_url == "https://api.example.com"
+
+
+def test_desktop_key_to_remote_api_url_refused(tmp_path):
+    _make_desktop_key(tmp_path, "darwin")
+    with pytest.raises(McpToolError, match="NIMBUS_ALLOW_REMOTE_MCP_KEY"):
+        resolve_credential(
+            env={"NIMBUS_API_URL": "https://api.example.com"}, home=tmp_path, platform="darwin"
+        )
+
+
+def test_desktop_key_remote_allowed_with_override(tmp_path):
+    _make_desktop_key(tmp_path, "darwin")
+    cred = resolve_credential(
+        env={"NIMBUS_API_URL": "https://api.example.com", "NIMBUS_ALLOW_REMOTE_MCP_KEY": "1"},
+        home=tmp_path,
+        platform="darwin",
+    )
+    assert cred.kind == "desktop_key"
+    assert cred.api_url == "https://api.example.com"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8080",
+        "http://localhost:9999",
+        "http://[::1]:9000",
+        "http://LOCALHOST:1",
+        "https://127.0.0.1",
+        "https://localhost",
+    ],
+)
+def test_mcp_key_to_loopback_api_urls_allowed(tmp_path, url):
+    """Every loopback spelling is fine without any override — the check is on
+    the hostname, not the scheme, so https loopback URLs pass too."""
+    cred = resolve_credential(
+        env={"NIMBUS_MCP_KEY": "k", "NIMBUS_API_URL": url}, home=tmp_path, platform="darwin"
+    )
+    assert cred.kind == "key"
+
+
+def test_hosted_token_to_remote_api_url_allowed(tmp_path):
+    """The guard is X-MCP-Key-only: hosted tokens are MEANT for remote URLs."""
+    cred = resolve_credential(
+        env={"NIMBUS_TOKEN": "nimb_x", "NIMBUS_API_URL": "https://api.example.com"},
+        home=tmp_path,
+        platform="darwin",
+    )
+    assert cred.kind == "token"
+    assert cred.api_url == "https://api.example.com"

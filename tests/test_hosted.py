@@ -6,9 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from nimbus_mcp import hosted
+from nimbus_mcp.client import NimbusClient
 from nimbus_mcp.config import McpConfig
 from nimbus_mcp.hosted import HeaderCredentialClient, hosted_setup_guidance
 from nimbus_mcp.setup_mode import SetupRequired, token_rejected_guidance
@@ -87,6 +89,72 @@ def test_authorization_bearer_form_accepted() -> None:
     proxy, made = _client({"authorization": "Bearer nimb_bearer_form"})
     assert proxy.get("/x") == {"ok": True, "token": "nimb_bearer_form"}
     assert len(made) == 1
+
+
+# ── X-Nimbus-Token may carry an Authorization-style Bearer prefix ───────────
+# MCP clients that template one header shape into both fields send
+# "X-Nimbus-Token: Bearer nimb_…"; without normalization the gateway would
+# forward Authorization: Bearer Bearer nimb_… and the auth layer would reject
+# every call from such a client.
+
+def test_x_nimbus_token_bearer_prefix_is_stripped() -> None:
+    proxy, made = _client({"x-nimbus-token": "Bearer nimb_x"})
+    assert proxy.get("/x") == {"ok": True, "token": "nimb_x"}
+    assert made[0].config.nimbus_token == "nimb_x"
+
+
+def test_x_nimbus_token_bearer_prefix_case_insensitive() -> None:
+    proxy, _ = _client({"x-nimbus-token": "bearer nimb_lower"})
+    assert proxy._current_token() == "nimb_lower"
+
+
+def test_x_nimbus_token_bearer_prefix_not_double_prefixed_on_wire() -> None:
+    """End-to-end through the real NimbusClient: the Authorization header the
+    backend receives is exactly `Bearer nimb_x` — never `Bearer Bearer nimb_x`."""
+    seen: list[str | None] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req.headers.get("authorization"))
+        return httpx.Response(200, json={"ok": True})
+
+    proxy = HeaderCredentialClient(
+        _config(),
+        client_factory=lambda cfg: NimbusClient(cfg, transport=httpx.MockTransport(handler)),
+        headers_getter=lambda: {"x-nimbus-token": "Bearer nimb_x"},
+    )
+    assert proxy.get("/api/me/profile") == {"ok": True}
+    assert seen == ["Bearer nimb_x"]
+
+
+def test_x_nimbus_token_bearer_only_value_is_no_credential() -> None:
+    """`Bearer ` with nothing after it is not a credential — headerless
+    guidance applies, and the env fallback (if any) wins."""
+    proxy, made = _client({"x-nimbus-token": "Bearer "}, config=_config(token="nimb_env"))
+    assert proxy.get("/x") == {"ok": True, "token": "nimb_env"}
+
+
+# ── credential_report: truthful per-request identity for whoami ────────────
+
+def test_credential_report_header_token_masked() -> None:
+    proxy, _ = _client({"x-nimbus-token": "nimb_gateway_token"})
+    assert proxy.credential_report() == {"source": "header", "token": "nimb_gateway…"}
+
+
+def test_credential_report_bearer_header_also_source_header() -> None:
+    proxy, _ = _client({"authorization": "Bearer nimb_auth_form"})
+    assert proxy.credential_report() == {"source": "header", "token": "nimb_auth_fo…"}
+
+
+def test_credential_report_env_fallback_source_and_mask() -> None:
+    """Headerless call on a gateway started with NIMBUS_TOKEN: the fallback
+    supplied the credential, so the report says so (not "header")."""
+    proxy, _ = _client({}, config=_config(token="nimb_env_fallback"))
+    assert proxy.credential_report() == {"source": "env", "token": "nimb_env_fal…"}
+
+
+def test_credential_report_no_token_reports_none() -> None:
+    proxy, _ = _client({})
+    assert proxy.credential_report() == {"source": "env", "token": None}
 
 
 def test_token_clients_are_cached_per_token() -> None:

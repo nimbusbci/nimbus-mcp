@@ -4,9 +4,11 @@
 MCP clients (and registries such as Smithery) can connect by URL. The
 gateway process itself holds NO credential: each request's Nimbus API token
 arrives as an MCP client header (``X-Nimbus-Token: nimb_…`` or
-``Authorization: Bearer nimb_…``) and is resolved per call, so one shared
-gateway serves many users as themselves. Headerless calls get the hosted
-flavor of the setup guidance (add the header, or install locally via uvx).
+``Authorization: Bearer nimb_…`` — an Authorization-style ``Bearer ``
+prefix on ``X-Nimbus-Token`` is stripped) and is resolved per call, so one
+shared gateway serves many users as themselves. Headerless calls get the
+hosted flavor of the setup guidance (add the header, or install locally via
+uvx).
 
 If the gateway process itself was started with ``NIMBUS_TOKEN`` in the
 environment (single-tenant self-hosting), that token is the fallback for
@@ -24,7 +26,7 @@ from typing import Any
 
 from fastmcp.server.dependencies import get_http_headers
 
-from .client import NimbusClient
+from .client import NimbusClient, _credential_fingerprint, _mask_secret
 from .config import McpConfig
 from .setup_mode import SetupRequired
 
@@ -118,25 +120,64 @@ class HeaderCredentialClient:
 
     # ── credential resolution ─────────────────────────────────────────────
 
-    def _current_token(self) -> str | None:
-        """The request's token: X-Nimbus-Token, or Authorization: Bearer ….
+    def _resolve_token(self) -> tuple[str | None, bool]:
+        """``(token, from_header)`` — the request's credential and whether a
+        request header supplied it (vs the startup fallback).
 
-        Returns the startup ``NIMBUS_TOKEN`` fallback (single-tenant
-        self-hosting) when the request carries neither header. Header keys
-        arrive lowercase (Starlette convention) — check both spellings.
+        Header keys arrive lowercase (Starlette convention) — check both
+        spellings. ``X-Nimbus-Token`` values sometimes carry an
+        Authorization-style ``Bearer `` prefix (MCP clients that template one
+        header shape into both fields); it is stripped here,
+        case-insensitively, so the backend receives
+        ``Authorization: Bearer <token>`` — never a double-prefixed scheme
+        the auth layer would reject.
         """
         try:
             headers = self._headers_getter() or {}
         except Exception:
             headers = {}
-        token = headers.get("x-nimbus-token") or headers.get("X-Nimbus-Token")
-        if not token:
-            auth = headers.get("authorization") or headers.get("Authorization")
-            if auth and auth.lower().startswith("bearer "):
-                token = auth[7:].strip()
+        token = (headers.get("x-nimbus-token") or headers.get("X-Nimbus-Token") or "").strip()
+        if token[:7].lower() == "bearer ":
+            token = token[7:].strip()
+        elif token.lower() == "bearer":
+            token = ""  # scheme with no credential is no credential
         if token:
-            return token.strip()
-        return self.config.nimbus_token or None
+            return token, True
+        auth = headers.get("authorization") or headers.get("Authorization")
+        if auth and auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+            if token:
+                return token, True
+        return self.config.nimbus_token or None, False
+
+    def _current_token(self) -> str | None:
+        """The request's token: X-Nimbus-Token, or Authorization: Bearer ….
+
+        Returns the startup ``NIMBUS_TOKEN`` fallback (single-tenant
+        self-hosting) when the request carries neither header.
+        """
+        return self._resolve_token()[0]
+
+    def credential_report(self) -> dict[str, Any]:
+        """Per-request counterpart of
+        :meth:`nimbus_mcp.client.NimbusClient.credential_report`: which token
+        carried THIS call (masked) and where it came from — ``"header"`` for
+        request-header tokens, otherwise the base config's source (the
+        startup ``NIMBUS_TOKEN`` fallback). No resolvable token → ``None``.
+        """
+        token, from_header = self._resolve_token()
+        source = "header" if from_header else (self.config.credential_meta.get("source") or "env")
+        return {"source": source, "token": _mask_secret(token) if token else None}
+
+    def credential_fingerprint(self) -> str:
+        """Per-request counterpart of
+        :meth:`nimbus_mcp.client.NimbusClient.credential_fingerprint`: the
+        fingerprint of the token carrying THIS call, so process-local state
+        (campaign's experiment registry) is scoped per gateway user, not per
+        gateway process. ``"anon"`` when no token is resolvable — campaign
+        tools hit that only after their setup preflight already raised."""
+        token = self._current_token()
+        return _credential_fingerprint(token) if token else "anon"
 
     def _build_token_client(self, token: str) -> NimbusClient:
         return self._client_factory(

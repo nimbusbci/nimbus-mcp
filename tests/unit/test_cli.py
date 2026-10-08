@@ -543,3 +543,51 @@ def test_logout_permission_error_is_reported_not_raised(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "permission denied" in out
     assert str(credentials_store_path()) in out
+
+
+# ── serve: loopback default; 0.0.0.0 is explicit opt-in ─────────────────────
+# The gateway accepts whatever token a request carries, so an accidental LAN
+# bind would expose an unauthenticated MCP surface. --host and NIMBUS_MCP_HOST
+# remain the explicit opt-in path (the Fly deployment sets the env).
+
+def test_serve_defaults_to_loopback_host(monkeypatch):
+    import nimbus_mcp.server as server_mod
+
+    captured: dict = {}
+    monkeypatch.setattr(server_mod, "serve", lambda **kw: captured.update(kw))
+    monkeypatch.delenv("NIMBUS_MCP_HOST", raising=False)
+    rc = cli.main(["serve"])
+    assert rc == 0
+    assert captured["host"] == "127.0.0.1"
+
+
+def test_serve_host_env_overrides_default(monkeypatch):
+    import nimbus_mcp.server as server_mod
+
+    captured: dict = {}
+    monkeypatch.setattr(server_mod, "serve", lambda **kw: captured.update(kw))
+    monkeypatch.setenv("NIMBUS_MCP_HOST", "10.0.0.5")
+    cli.main(["serve"])
+    assert captured["host"] == "10.0.0.5"
+
+
+def test_serve_host_flag_beats_env(monkeypatch):
+    import nimbus_mcp.server as server_mod
+
+    captured: dict = {}
+    monkeypatch.setattr(server_mod, "serve", lambda **kw: captured.update(kw))
+    monkeypatch.setenv("NIMBUS_MCP_HOST", "10.0.0.5")
+    cli.main(["serve", "--host", "192.168.1.9"])
+    assert captured["host"] == "192.168.1.9"
+
+
+def test_serve_signature_default_is_the_loopback_constant():
+    """server.serve and the CLI must agree on ONE default (config's constant),
+    so the std library entry point can't drift from `nimbus-mcp serve`."""
+    import inspect
+
+    from nimbus_mcp.config import DEFAULT_SERVE_HOST
+    from nimbus_mcp.server import serve
+
+    assert DEFAULT_SERVE_HOST == "127.0.0.1"
+    assert inspect.signature(serve).parameters["host"].default == DEFAULT_SERVE_HOST

@@ -6,11 +6,13 @@ starts a live streaming session on the user's head.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import Any
 
 from fastmcp import FastMCP
 
 from ..client import NimbusClient
+from ..setup_mode import SetupRequired
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
 from ._guards import safe_segment
 
@@ -46,19 +48,35 @@ def _device_body(device_type: str, values: dict[str, Any]) -> dict[str, Any]:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    def _stop_chain(sess_id: str) -> dict[str, Any]:
+    def _stop_chain(sess_id: str, via_client: NimbusClient = client) -> dict[str, Any]:
         """stop-stream then best-effort disconnect — the single stop sequence
-        shared by the stream.stop tool and the idle-timeout watchdog."""
-        stopped = client.post("/api/hardware/stop-stream", json={"sessionId": sess_id})
+        shared by the stream.stop tool and the idle-timeout watchdog.
+        via_client defaults to the server's own client (the stream.stop
+        path); the watchdog passes the request-bound client from below."""
+        stopped = via_client.post("/api/hardware/stop-stream", json={"sessionId": sess_id})
         disconnect_warning = None
         try:
-            client.post("/api/hardware/disconnect", json={"sessionId": sess_id})
+            via_client.post("/api/hardware/disconnect", json={"sessionId": sess_id})
         except Exception as err:  # best-effort: stream is already stopped
             disconnect_warning = f"stopped, but disconnect failed: {err}"
         return {
             "stopped": bool(stopped.get("stopped", True)),
             "disconnectWarning": disconnect_warning,
         }
+
+    def _stop_chain_via(
+        binding: AbstractContextManager[NimbusClient], sess_id: str
+    ) -> dict[str, Any]:
+        """Watchdog stop path: enter the request-bound client and run the stop
+        chain through it. The binding is created inside the stream.start
+        request because the watchdog's checker thread fires with no MCP
+        request context — a hosted gateway cannot resolve its per-request
+        token there. Hosted mode yields a fresh per-token client that is
+        ALWAYS closed on exit (the with-block exits even when the stop call
+        raises; the checker swallows the error afterwards); local mode yields
+        the shared client and never closes it."""
+        with binding as bound:
+            return _stop_chain(sess_id, bound)
 
     @mcp.tool(name="device.list", annotations=READ_ONLY)
     def list_devices() -> dict[str, Any]:
@@ -177,12 +195,24 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         if session_id is not None and idle_timeout_sec > 0:
             from . import activity  # imported here to keep the module graph acyclic
 
-            watch_id = str(session_id)
-            activity.register_started(
-                watch_id,
-                lambda: _stop_chain(watch_id),
-                float(idle_timeout_sec),
-            )
+            # Bind BEFORE registering (same pattern as experiment.run's
+            # worker thread): the idle-watchdog checker fires the stop
+            # callback with no MCP request context, so a request-scoped
+            # client — the hosted gateway — cannot resolve its per-request
+            # token there. bound_client() runs here, inside the request.
+            try:
+                binding = client.bound_client()
+            except SetupRequired:
+                # Unreachable in practice (the posts above already refused in
+                # setup mode), but never let the safety net crash the start.
+                binding = None
+            if binding is not None:
+                watch_id = str(session_id)
+                activity.register_started(
+                    watch_id,
+                    lambda: _stop_chain_via(binding, watch_id),
+                    float(idle_timeout_sec),
+                )
         return {
             "started": bool(started.get("started")),
             "sessionId": session_id,
@@ -223,10 +253,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         sess_id = safe_segment(session_id, label="session id")
         from . import activity
 
-        try:
-            outcome = _stop_chain(sess_id)
-        finally:
-            activity.unregister(sess_id)
+        # Unregister ONLY when the backend accepted the stop: on failure the
+        # error propagates to the caller (they see the 403) and the watchdog
+        # stays armed — a rejected stop must not disarm the safety net for a
+        # session that may still be streaming on the user's head.
+        outcome = _stop_chain(sess_id)
+        activity.unregister(sess_id)
         return {
             "stopped": outcome["stopped"],
             "sessionId": sess_id,

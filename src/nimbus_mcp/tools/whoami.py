@@ -46,6 +46,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         or to check which credential a session uses."""
         profile = client.get("/api/me/profile")
         caps = profile.get("capabilities") or {}
+        report = client.credential_report()
+        token_info = _token_info(client)
+        if report["source"] == "header":
+            # Gateway per-request credential: no store metadata exists for a
+            # header token, so the masked prefix from the report is the only
+            # truthful identifier of WHICH token carried this call. Local
+            # credential modes never gain token material here — name/expiry
+            # identify them, and the raw secret is never printed.
+            token_info = {"masked": report["token"]}
         return {
             "userId": profile.get("userId"),
             "email": profile.get("email"),
@@ -57,6 +66,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "monthlyLimit": caps.get("freeTrainingRunsMonthlyLimit"),
                 "remaining": caps.get("freeTrainingRunsRemaining"),
             },
-            "token": _token_info(client),
-            "source": client.config.credential_meta.get("source") or "env",
+            "token": token_info,
+            "source": report["source"],
         }

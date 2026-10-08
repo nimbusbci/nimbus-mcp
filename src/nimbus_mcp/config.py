@@ -14,6 +14,7 @@ from .errors import McpToolError
 __all__ = [
     "DEFAULT_API_URL",
     "DEFAULT_EXPORT_DIR",
+    "DEFAULT_SERVE_HOST",
     "McpConfig",
     "default_export_dir",
     "load_config",
@@ -30,6 +31,12 @@ def default_export_dir() -> Path:
 
 # Import-time snapshot kept for backwards compat; prefer default_export_dir().
 DEFAULT_EXPORT_DIR = default_export_dir()
+
+# `nimbus-mcp serve` binds loopback by default: the gateway accepts any token
+# the request carries, so an accidental LAN bind would expose an unauthenticated
+# MCP surface. Binding 0.0.0.0 (to expose the gateway) is explicit opt-in via
+# --host / NIMBUS_MCP_HOST and must be combined with per-request tokens.
+DEFAULT_SERVE_HOST = "127.0.0.1"
 
 
 @dataclass(frozen=True)

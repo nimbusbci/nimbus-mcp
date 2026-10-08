@@ -9,7 +9,7 @@ from fastmcp.tools.base import ToolResult
 
 from . import __version__
 from .client import NimbusClient, NullClient
-from .config import load_config
+from .config import DEFAULT_SERVE_HOST, load_config
 from .setup_mode import SetupRequired
 from .tools import (
     artifacts,
@@ -120,13 +120,15 @@ def main() -> None:
     build_server().run()  # stdio transport
 
 
-def serve(host: str = "0.0.0.0", port: int = 8080, path: str = "/mcp") -> None:
+def serve(host: str = DEFAULT_SERVE_HOST, port: int = 8080, path: str = "/mcp") -> None:
     """Hosted gateway: streamable HTTP with per-request credentials.
 
     ``serve`` never resolves a process credential — the
     :class:`~nimbus_mcp.hosted.HeaderCredentialClient` reads each request's
     ``X-Nimbus-Token`` header, so one shared deployment serves many users as
-    themselves (setup guidance for headerless calls).
+    themselves (setup guidance for headerless calls). Binds loopback by
+    default; passing ``0.0.0.0`` to expose the gateway is explicit opt-in and
+    must be combined with those per-request tokens.
     """
     from .hosted import HeaderCredentialClient
 

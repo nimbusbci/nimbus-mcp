@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from collections.abc import Callable
 
@@ -8,6 +9,7 @@ from fastmcp import Client, FastMCP
 
 from nimbus_mcp.client import NimbusClient
 from nimbus_mcp.config import McpConfig
+from nimbus_mcp.hosted import HeaderCredentialClient
 from nimbus_mcp.tools import activity, live
 
 
@@ -36,6 +38,30 @@ def make_server(handler, calls=None) -> FastMCP:
     )
     server = FastMCP("t")
     live.register(server, client)
+    return server
+
+
+def make_header_server(handler) -> FastMCP:
+    """live server behind a HeaderCredentialClient (hosted gateway) whose
+    header getter answers everywhere EXCEPT the idle-watchdog checker thread
+    (where fastmcp reports no request — the production failure mode: the
+    checker fires the stop callback outside any MCP request context)."""
+
+    def getter() -> dict[str, str]:
+        if threading.current_thread().name == "nimbus-idle-watchdog":
+            return {}
+        return {"x-nimbus-token": "t1"}
+
+    def factory(cfg):
+        return NimbusClient(cfg, transport=httpx.MockTransport(handler))
+
+    proxy = HeaderCredentialClient(
+        McpConfig(api_url="http://t", mcp_key="", export_dir=None),  # type: ignore[arg-type]
+        client_factory=factory,
+        headers_getter=getter,
+    )
+    server = FastMCP("t")
+    live.register(server, proxy)
     return server
 
 
@@ -232,3 +258,100 @@ async def test_stream_status_polling_keeps_session_alive(monkeypatch):
     assert "/api/hardware/disconnect" not in calls
     with activity._LOCK:
         assert "sess-1" in activity._SESSIONS  # still registered, still alive
+
+
+async def test_watchdog_on_gateway_stops_via_request_bound_client(monkeypatch):
+    """(hosted regression) the checker thread fires the stop callback with no
+    MCP request context, so per-request token resolution cannot run there:
+    stream.start must capture a request-bound client (X-Nimbus-Token: t1 →
+    Authorization: Bearer t1) for the watchdog, and its stop+disconnect must
+    arrive authenticated as that user instead of being swallowed as a
+    SetupRequired by the checker's catch-all."""
+    monkeypatch.setattr(activity, "CHECK_INTERVAL_SEC", 0.5)
+    calls: list[str] = []
+    auth_headers: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        calls.append(path)
+        if path == "/api/hardware/connect":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "status": "success",
+                    "sessionId": "sess-gw",
+                    "connected": True,
+                    "deviceType": "brainbit",
+                    "channels": 4,
+                },
+            )
+        if path == "/api/hardware/start-stream":
+            return httpx.Response(
+                200, json={"ok": True, "started": True, "sessionId": "sess-gw", "updateRateHz": 2.0}
+            )
+        if path in ("/api/hardware/stop-stream", "/api/hardware/disconnect"):
+            auth_headers.append(req.headers.get("authorization", ""))
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(path)
+
+    async with Client(make_header_server(handler)) as c:
+        result = await c.call_tool(
+            "stream.start",
+            {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 1},
+        )
+        assert result.data["started"] is True
+        time.sleep(2.5)
+    assert calls.count("/api/hardware/stop-stream") == 1
+    assert calls.count("/api/hardware/disconnect") == 1
+    # the regression: the watchdog's requests authenticate as the STARTING
+    # request's user, not as the credential-less gateway process
+    assert auth_headers == ["Bearer t1", "Bearer t1"]
+
+
+async def test_stream_stop_rejected_keeps_watchdog_armed(monkeypatch):
+    """A stop the backend rejects (403: another user's session) must NOT
+    disarm the idle watchdog — the session may still be streaming, and the
+    error has to propagate to the caller. Unregister only happens once the
+    backend accepts the stop."""
+    monkeypatch.setattr(activity, "CHECK_INTERVAL_SEC", 0.5)
+    state = {"reject_stop": False}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path == "/api/hardware/connect":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "status": "success",
+                    "sessionId": "sess-1",
+                    "connected": True,
+                    "deviceType": "brainbit",
+                    "channels": 4,
+                },
+            )
+        if path == "/api/hardware/start-stream":
+            return httpx.Response(200, json={"ok": True, "started": True, "updateRateHz": 2.0})
+        if path == "/api/hardware/stop-stream" and state["reject_stop"]:
+            return httpx.Response(403, json={"detail": "session belongs to another user"})
+        if path in ("/api/hardware/stop-stream", "/api/hardware/disconnect"):
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(path)
+
+    async with Client(make_server(handler)) as c:
+        await c.call_tool(
+            "stream.start", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 60}
+        )
+        with activity._LOCK:
+            assert "sess-1" in activity._SESSIONS  # armed by stream.start
+        state["reject_stop"] = True
+        with pytest.raises(Exception, match="403"):
+            await c.call_tool("stream.stop", {"session_id": "sess-1"})
+        with activity._LOCK:
+            assert "sess-1" in activity._SESSIONS  # rejected stop leaves it armed
+        state["reject_stop"] = False
+        result = await c.call_tool("stream.stop", {"session_id": "sess-1"})
+        assert result.data["stopped"] is True  # return contract unchanged
+        with activity._LOCK:
+            assert "sess-1" not in activity._SESSIONS  # accepted stop disarms

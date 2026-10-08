@@ -389,3 +389,71 @@ async def test_experiment_run_survives_worker_without_request_context(monkeypatc
     run = snapshot.data["runs"][0]
     assert run["status"] == "completed", run
     assert run["metrics"]["kappa"] == 0.5
+
+
+# ── per-credential scoping: the registry must not leak across users ────────
+# EXPERIMENTS is process-global, and a shared gateway authenticates many
+# users per process: an experiment id registered under token A must be
+# invisible to token B, or any authenticated gateway user could poll another
+# user's sweep by guessing/seeing the id.
+
+
+def make_two_tenant_server(backend: FakeBackend) -> tuple[FastMCP, dict]:
+    """campaign server behind a HeaderCredentialClient whose token is chosen
+    per call via ``state["token"]`` (the worker thread sees no headers, like
+    on the real gateway), so one test client can act as two different users."""
+
+    state = {"token": "nimb_alice"}
+
+    def getter() -> dict[str, str]:
+        if threading.current_thread().name.startswith("nimbus-experiment"):
+            return {}
+        return {"x-nimbus-token": state["token"]}
+
+    def factory(cfg):
+        return NimbusClient(cfg, transport=httpx.MockTransport(backend.handler))
+
+    proxy = HeaderCredentialClient(
+        McpConfig(api_url="http://t", mcp_key="", export_dir=None),  # type: ignore[arg-type]
+        client_factory=factory,
+        headers_getter=getter,
+    )
+    server = FastMCP("t")
+    campaign.register(server, proxy)
+    return server, state
+
+
+async def test_experiment_invisible_across_credentials(monkeypatch):
+    """Cross-tenant: register under token A, experiment.get under token B →
+    "Unknown experiment" (the same process-local error as a foreign process);
+    the owner still sees the experiment and it completes normally."""
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+    server, state = make_two_tenant_server(backend)
+    async with Client(server) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        experiment_id = result.data["experimentId"]  # returned plain, unchanged
+
+        state["token"] = "nimb_bob"  # same gateway process, different user
+        with pytest.raises(Exception, match="Unknown experiment"):
+            await c.call_tool("experiment.get", {"experiment_id": experiment_id})
+
+        state["token"] = "nimb_alice"  # the owner keeps full visibility
+        snapshot = await wait_for_terminal(c, experiment_id)
+        assert snapshot.data["status"] == "completed"
+        assert snapshot.data["runs"][0]["metrics"]["kappa"] == 0.5
+
+
+def test_experiments_registry_keys_by_credential_fingerprint():
+    """The registry stores/looks up by ``"<fingerprint>:<experiment_id>"`` —
+    the same experiment_id under two fingerprints is two entries, and an
+    unknown id under a known fingerprint is a miss."""
+    reg = campaign.Experiments()
+    state = campaign.ExperimentState("exp1", [], max_in_flight=1)
+    reg.add(state, fingerprint="fp_alice")
+    assert reg.snapshot("fp_alice", "exp1") is not None
+    assert reg.snapshot("fp_alice", "exp1")["experimentId"] == "exp1"
+    assert reg.snapshot("fp_bob", "exp1") is None  # other tenant: miss
+    assert reg.snapshot("fp_alice", "exp_other") is None
