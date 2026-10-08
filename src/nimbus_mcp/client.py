@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,11 @@ _AUTH_HINT = (
 
 # Quota denials (run_pipeline / run_experiment 403s) that carry the pricing
 # deep-link; the single place the link is appended is _backend_error (v0.5 T5).
-_QUOTA_ERROR_CODES = frozenset({"FREEMIUM_MONTHLY_QUOTA_EXCEEDED", "RUNTIME_PAID_TIER_REQUIRED"})
+# The values are the backend's dotted wire codes (utils/api_codes.py:
+# FREEMIUM_MONTHLY_QUOTA_EXCEEDED / RUNTIME_PAID_TIER_REQUIRED constants).
+_QUOTA_ERROR_CODES = frozenset(
+    {"nimbus.freemium.monthly_quota_exceeded", "nimbus.runtime.paid_tier_required"}
+)
 QUOTA_PRICING_URL = "https://studio.nimbusbci.com/pricing?reason=mcp-quota"
 
 
@@ -58,6 +63,16 @@ class NimbusClient:
 
     def close(self) -> None:
         self._http.close()
+
+    def bound_client(self) -> AbstractContextManager[NimbusClient]:
+        """A client safe to use outside the MCP request context, as a context
+        manager the caller owns for its lifetime (e.g. campaign's worker
+        thread, where fastmcp's header lookup answers {} and request-scoped
+        credential resolution cannot run). A plain NimbusClient is
+        context-free: yields itself and never closes on exit — it is the
+        process-wide client the server was built with. The hosted wrapper
+        yields a fresh per-token client it closes on exit instead."""
+        return nullcontext(self)
 
     def ensure_ready(self) -> None:
         """Preflight hook for tools that do work outside the request path

@@ -72,6 +72,27 @@ def _fetch_template(client: NimbusClient, template_id: str) -> dict[str, Any]:
     return json.loads(json.dumps(template))  # deep copy before patching
 
 
+def _exec_connections(raw: Any, template_id: str) -> list[dict[str, str]]:
+    """Connections reduced to ``{from, to}`` only.
+
+    The execute request's GraphConnection is ``extra="forbid"``, so canvas
+    handles (sourceHandle/targetHandle) that ride template snapshots (sart,
+    target_hit) must be stripped — posting them verbatim is a 422 before any
+    route code runs. A connection without both endpoints is a broken template:
+    raising beats silently dropping the edge (a missing edge trains a wrong
+    pipeline).
+    """
+    out: list[dict[str, str]] = []
+    for conn in raw or []:
+        if not isinstance(conn, dict) or "from" not in conn or "to" not in conn:
+            raise McpToolError(
+                f"Template '{template_id}' has a connection without from/to "
+                f"endpoints: {conn!r}"
+            )
+        out.append({"from": conn["from"], "to": conn["to"]})
+    return out
+
+
 def _graph_section(template: dict[str, Any], section: str, template_id: str) -> dict[str, Any]:
     """A template's graph section ({nodes, connections}), inner layout dropped.
 
@@ -88,7 +109,7 @@ def _graph_section(template: dict[str, Any], section: str, template_id: str) -> 
             raise McpToolError(f"Template '{template_id}' has no {section} graph section.")
     return {
         "nodes": [n for n in (raw.get("nodes") or []) if isinstance(n, dict)],
-        "connections": [c for c in (raw.get("connections") or []) if isinstance(c, dict)],
+        "connections": _exec_connections(raw.get("connections"), template_id),
     }
 
 
@@ -122,7 +143,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         its calibration dashboard automatically; poll calibration.status.
         Requires a Pro plan (hosted token or Pro session): calibration nodes and
         custom-data training are gated by the freemium node policy; local
-        X-MCP-Key principals get 403 by policy.
+        X-MCP-Key principals pass only when the desktop app flags the signed-in
+        Pro session (MCP_LOCAL_IS_PRO).
 
         Args:
             paradigm: mi | p300 | sart | target_hit.

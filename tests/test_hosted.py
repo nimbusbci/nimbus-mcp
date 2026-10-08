@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from nimbus_mcp import hosted
 from nimbus_mcp.config import McpConfig
 from nimbus_mcp.hosted import HeaderCredentialClient, hosted_setup_guidance
 from nimbus_mcp.setup_mode import SetupRequired, token_rejected_guidance
@@ -176,3 +177,121 @@ def test_hosted_guidance_shape_matches_spec() -> None:
     assert guidance["setupRequired"] is True
     assert guidance["daysExpired"] == 2
     assert isinstance(guidance["options"], list) and guidance["options"]
+
+
+# ── bound_client: workers outlive the request context ──────────────────────
+# A background worker thread (experiment.run) has no MCP request context:
+# get_http_headers() returns {} there, so per-request token resolution cannot
+# run. bound_client() yields a token-bound client the worker owns for its
+# lifetime — the header getter is never consulted inside the worker.
+
+def test_bound_client_works_after_request_context_gone() -> None:
+    """The bound client keeps working once the header getter goes empty (the
+    worker-thread situation) and is closed when the context exits."""
+    headers: dict[str, str] = {"x-nimbus-token": "nimb_bound"}
+    proxy, made = _client(headers)
+
+    with proxy.bound_client() as bound:
+        headers.clear()  # request context gone — proxy resolution now fails
+        with pytest.raises(SetupRequired):
+            proxy.get("/api/noworker")  # sanity: the proxy itself is stranded
+        assert bound.get("/api/worker") == {"ok": True, "token": "nimb_bound"}
+        assert made, "bound client was built"
+    # Worker-owned: closed on context exit (FakeClient records the call).
+    assert any(call == ("close", ()) for client in made for call in client.calls)
+
+
+def test_bound_client_headerless_raises_guidance() -> None:
+    proxy, made = _client({})
+    with pytest.raises(SetupRequired) as err:
+        proxy.bound_client()
+    assert made == []
+    assert err.value.guidance["setupRequired"] is True
+
+
+# ── eviction must not close clients other threads are using ────────────────
+
+def test_eviction_retires_before_closing() -> None:
+    """At the client cap, eviction drops cache references but closes only the
+    set retired by the PREVIOUS eviction — a mid-request client from the
+    current set survives; the retired set has a full cycle to drain."""
+    headers: dict[str, str] = {}
+    made: list[FakeClient] = []
+
+    def factory(cfg: McpConfig) -> FakeClient:
+        client = FakeClient(cfg)
+        made.append(client)
+        return client
+
+    proxy = HeaderCredentialClient(
+        _config(), client_factory=factory, headers_getter=lambda: headers, max_clients=2
+    )
+    headers["x-nimbus-token"] = "nimb_a"
+    proxy.get("/1")
+    headers["x-nimbus-token"] = "nimb_b"
+    proxy.get("/2")
+    a, b = made
+    assert not a.calls or a.calls[-1] != ("close", ())
+
+    headers["x-nimbus-token"] = "nimb_c"  # cap (2) reached → evict a, b
+    proxy.get("/3")
+    assert ("close", ()) not in a.calls and ("close", ()) not in b.calls  # retired, alive
+
+    headers["x-nimbus-token"] = "nimb_d"  # cache {c} only — no eviction yet
+    proxy.get("/4")
+    assert ("close", ()) not in a.calls and ("close", ()) not in b.calls
+
+    headers["x-nimbus-token"] = "nimb_e"  # cap reached again → close the retired a, b
+    proxy.get("/5")
+    assert ("close", ()) in a.calls and ("close", ()) in b.calls
+    # Freshly cached clients from the previous eviction stay open.
+    c = made[2]
+    assert ("close", ()) not in c.calls
+
+
+# ── the default header getter must expose `authorization` ──────────────────
+# fastmcp's get_http_headers strips credential headers (authorization, cookie)
+# by default; a plain default getter makes the Bearer fallback below
+# unreachable on the real gateway. Pin the default against real fastmcp.
+
+def test_default_headers_getter_includes_authorization() -> None:
+    from fastmcp.server import dependencies as dep
+
+    var = getattr(dep, "_current_http_request", None)
+    if var is None or not hasattr(var, "set"):
+        pytest.skip("fastmcp request ContextVar moved — re-pin this test")
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [(b"authorization", b"Bearer nimb_live")],
+        "query_string": b"",
+        "scheme": "http",
+    }
+    token = var.set(Request(scope))
+    try:
+        # fastmcp's documented default: credential headers stripped …
+        assert dep.get_http_headers().get("authorization") is None
+        # … so the gateway's default getter must request them explicitly.
+        headers = hosted._default_headers_getter()
+    finally:
+        var.reset(token)
+    assert headers.get("authorization") == "Bearer nimb_live"
+
+
+def test_default_headers_getter_falls_back_when_include_missing(monkeypatch) -> None:
+    """fastmcp <2.10 has no `include` kwarg: the getter degrades to the plain
+    call (X-Nimbus-Token resolution unaffected) instead of crashing."""
+    calls: list[dict[str, object]] = []
+
+    def fake(**kwargs: object) -> dict[str, str]:
+        calls.append(kwargs)
+        if "include" in kwargs:
+            raise TypeError("unexpected keyword argument 'include'")
+        return {"x-nimbus-token": "nimb_ok"}
+
+    monkeypatch.setattr(hosted, "get_http_headers", fake)
+    assert hosted._default_headers_getter() == {"x-nimbus-token": "nimb_ok"}
+    assert calls == [{"include": {"authorization"}}, {}]  # retried plain

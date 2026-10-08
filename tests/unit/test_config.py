@@ -170,3 +170,18 @@ def test_env_key_beats_store_and_desktop(_isolated_home):
     cfg = load_config(env={"NIMBUS_MCP_KEY": "env-key"})
     assert cfg.mcp_key == "env-key"
     assert cfg.nimbus_token == ""
+
+
+def test_export_dir_follows_current_home(monkeypatch, tmp_path):
+    """The default export dir resolves $HOME at CALL time, not import time —
+    a changed HOME (tests, service users) must be honored. Pins the contract
+    that keeps default_export_dir() and the DEFAULT_EXPORT_DIR snapshot from
+    re-inlining the same path expression."""
+    from nimbus_mcp.config import DEFAULT_EXPORT_DIR, default_export_dir
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg = load_config({"NIMBUS_TOKEN": "nimb_x"})
+    assert cfg.export_dir == tmp_path / "nimbus-exports"
+    assert default_export_dir() == tmp_path / "nimbus-exports"
+    # The exported constant stays the import-time snapshot (compat).
+    assert DEFAULT_EXPORT_DIR != tmp_path / "nimbus-exports"

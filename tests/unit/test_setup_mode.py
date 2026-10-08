@@ -234,7 +234,7 @@ async def test_run_pipeline_quota_403_carries_pricing_link():
         return httpx.Response(
             403,
             json={
-                "code": "FREEMIUM_MONTHLY_QUOTA_EXCEEDED",
+                "code": "nimbus.freemium.monthly_quota_exceeded",
                 "title": "Forbidden",
                 "detail": "Monthly free training quota exceeded.",
             },
@@ -268,3 +268,13 @@ def test_token_rejected_guidance_expiry_day_math():
     exp = time.time() - 0.5 * 86400  # half a day ago → at least 1 day reported
     guidance = token_rejected_guidance(fake_token({"exp": exp}), 401)
     assert guidance["daysExpired"] == 1
+
+
+def test_build_server_reports_package_version():
+    """The initialize handshake (serverInfo.version) must report THIS
+    package's version, not fastmcp's — registries, Smithery scans and support
+    triage all read it. Guards the FastMCP(version=...) wiring."""
+    from nimbus_mcp import __version__
+
+    server = build_server()  # isolated env → NullClient; version is static
+    assert server.version == __version__

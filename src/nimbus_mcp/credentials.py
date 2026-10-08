@@ -13,7 +13,8 @@ The full chain (first hit wins), implementing Nimbus MCP v0.5 "Auth v2":
    ``api_url`` it was minted for.
 5. Desktop-app auto-discovery: the desktop's ``mcp-key.json`` at the
    per-OS Electron userData path (zero-config local mode — the key is local so
-   it authenticates with ``X-MCP-Key`` against ``http://127.0.0.1:8080``).
+   it authenticates with ``X-MCP-Key`` against ``http://127.0.0.1:<port>``
+   from the key file's optional ``port`` field, default ``:8080``).
 
 Explicit env configuration always beats files on disk; a store written by
 ``login`` beats desktop auto-discovery (a user who logged in wants the hosted
@@ -58,7 +59,8 @@ __all__ = [
 DEFAULT_API_URL = "http://127.0.0.1:8080"
 
 # The desktop app's Electron userData folder name and key file (desktop/lib/
-# mcp-config.js writes {"key": "...", "createdAt": "..."} there, 0600).
+# mcp-config.js writes {"key": "...", "createdAt": "...", "port": <int>?} there,
+# 0600; "port" is the backend port the app actually bound).
 DESKTOP_APP_DIR = "Nimbus Studio"
 DESKTOP_KEY_FILENAME = "mcp-key.json"
 
@@ -156,9 +158,10 @@ def write_store(
     try:
         if hasattr(os, "fchmod"):  # POSIX; Windows keeps os.open's mode intent
             os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1  # consumed by fdopen — the finally must never close it again
+        with fh:
             fh.write(data)
-            fd = -1  # consumed by fdopen
     finally:
         if fd >= 0:
             os.close(fd)
@@ -236,7 +239,14 @@ def discover_desktop_key(
     key = payload["key"]
     if not key:
         return None
-    return {"key": key, "createdAt": payload.get("createdAt"), "path": str(path)}
+    found = {"key": key, "createdAt": payload.get("createdAt"), "path": str(path)}
+    # Optional "port" (the backend port the desktop app actually bound) rides
+    # along only when it is a real TCP port; anything else keeps the 8080
+    # default below (bools are ints in Python — excluded explicitly).
+    port = payload.get("port")
+    if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535:
+        found["port"] = port
+    return found
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -252,7 +262,8 @@ def resolve_credential(
     """Run the full chain (see the module docstring for order and semantics).
 
     ``api_url`` resolution: ``NIMBUS_API_URL`` env > the store's ``api_url`` >
-    the desktop default (``http://127.0.0.1:8080``, i.e. ``DEFAULT_API_URL``).
+    the desktop key file's ``port`` (``http://127.0.0.1:<port>``) > the
+    desktop default (``http://127.0.0.1:8080``, i.e. ``DEFAULT_API_URL``).
     """
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
@@ -312,12 +323,15 @@ def resolve_credential(
                 meta[optional] = store[optional]
         return ResolvedCredential("token", _api_url(store.get("api_url")), store["token"], meta)
 
-    # 5. Desktop auto-discovery (silent skip) — local key, local default URL.
+    # 5. Desktop auto-discovery (silent skip) — local key; the key file's
+    # optional ``port`` (the app binds 8081/8082 when 8080 is taken) overrides
+    # the default local URL.
     desktop = discover_desktop_key(env=env, home=home, platform=platform)
     if desktop:
+        port_url = f"http://127.0.0.1:{desktop['port']}" if desktop.get("port") else None
         return ResolvedCredential(
             "desktop_key",
-            _api_url(),
+            _api_url(port_url),
             desktop["key"],
             {"source": "desktop", "path": desktop["path"], "created_at": desktop.get("createdAt")},
         )

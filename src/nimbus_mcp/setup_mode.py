@@ -46,7 +46,8 @@ SETUP_OPTIONS: list[dict[str, str]] = [
         "action": "start the Nimbus Studio desktop app",
         "detail": "Zero-config local mode: while the desktop app runs, its "
         "mcp-key.json is auto-discovered and authenticates against the local "
-        "backend at http://127.0.0.1:8080 — nothing to configure.",
+        "backend (port 8080, or whatever port the key file records when the "
+        "app bound another one) — nothing to configure.",
     },
     {
         "action": "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",

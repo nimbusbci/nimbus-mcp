@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 import time
 
 import httpx
@@ -9,6 +10,7 @@ from fastmcp import Client, FastMCP
 
 from nimbus_mcp.client import NimbusClient
 from nimbus_mcp.config import McpConfig
+from nimbus_mcp.hosted import HeaderCredentialClient
 from nimbus_mcp.tools import campaign
 
 TRAIN_GRAPH = {
@@ -21,42 +23,69 @@ TRAIN_GRAPH = {
 
 
 class FakeBackend:
-    """Simulates the three endpoints the campaign orchestrator drives.
+    """Simulates the three endpoints the campaign orchestrator drives, on the
+    REAL backend wire contract (pinned against nimbus_backend):
 
-    - POST /api/execute: 500 "Execution queue full" on the very first attempt
-      when queue_full_once is set, then {executionId} forever.
+    - POST /api/execute ALWAYS answers 200 {executionId} immediately — the
+      concurrency gate runs later, inside the execution task.
     - GET /api/executions/{id}/summary: 500 for the first summary_fail_first
-      attempts across all executions, then completed.
+      attempts across all executions, then completed — except ids in
+      queue_full_ids, which answer failed + errorMessage "Execution queue
+      full" once (executor.py's queue-gate write), matching
+      queue_full_times=1. For queue_full_times > 1 the first N executions'
+      summaries fail queue-full in a row.
+    - POST may omit executionId when drop_exec_id_first is set (first call
+      only): a malformed-200 the submit path must treat as a single failed
+      run, not a whole-experiment abort.
     - GET /api/result/{id}: {result: {metrics}} from the metrics map, or 500
       for execution ids listed in result_fail.
     """
 
     def __init__(
-        self, *, metrics=None, result_fail=(), queue_full_once=False, summary_fail_first=0
+        self,
+        *,
+        metrics=None,
+        result_fail=(),
+        queue_full_times=0,
+        summary_fail_first=0,
+        drop_exec_id_first=False,
     ):
         self.metrics = metrics or {}
         self.result_fail = set(result_fail)
-        self.queue_full_once = queue_full_once
+        self.queue_full_times = queue_full_times
         self.summary_fail_first = summary_fail_first
+        self.drop_exec_id_first = drop_exec_id_first
         self.execute_attempts = 0
         self.summary_attempts = 0
-        self._failed_once = False
+        self.queue_full_ids: set[str] = set()
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path == "/api/execute":
             self.execute_attempts += 1
-            if self.queue_full_once and not self._failed_once:
-                self._failed_once = True
-                return httpx.Response(500, json={"detail": "Execution queue full"})
-            return httpx.Response(
-                200, json={"executionId": f"exec_{self.execute_attempts}", "message": "started"}
-            )
+            exec_id = f"exec_{self.execute_attempts}"
+            if self.execute_attempts <= self.queue_full_times:
+                self.queue_full_ids.add(exec_id)
+            if self.drop_exec_id_first and self.execute_attempts == 1:
+                return httpx.Response(200, json={"message": "started"})
+            return httpx.Response(200, json={"executionId": exec_id, "message": "started"})
         if path.startswith("/api/executions/") and path.endswith("/summary"):
             self.summary_attempts += 1
             if self.summary_attempts <= self.summary_fail_first:
                 return httpx.Response(500, json={"detail": "summary unavailable"})
             exec_id = path.split("/")[3]
+            if exec_id in self.queue_full_ids:
+                self.queue_full_ids.discard(exec_id)  # one queue-full poll per id
+                return httpx.Response(
+                    200,
+                    json={
+                        "summary": {
+                            "executionId": exec_id,
+                            "status": "failed",
+                            "errorMessage": "Execution queue full",
+                        }
+                    },
+                )
             return httpx.Response(
                 200, json={"summary": {"executionId": exec_id, "status": "completed"}}
             )
@@ -133,16 +162,67 @@ async def test_run_experiment_single_run_completes_with_aggregates(monkeypatch):
 
 
 async def test_run_experiment_retries_queue_full(monkeypatch):
+    """Queue-full surfaces via the polled summary (status failed +
+    errorMessage), NEVER as an HTTP error — POST /api/execute always answers
+    200 immediately. The worker must resubmit the run on a queue-full
+    summary and succeed."""
     monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
     monkeypatch.setattr(campaign, "QUEUE_FULL_BACKOFF_SEC", 0.02)
-    backend = FakeBackend(queue_full_once=True, metrics={"exec_2": {"kappa": 0.5}})
+    backend = FakeBackend(queue_full_times=1, metrics={"exec_2": {"kappa": 0.5}})
     async with Client(make_server(backend)) as c:
         result = await c.call_tool(
             "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
         )
         snapshot = await wait_for_terminal(c, result.data["experimentId"])
     assert snapshot.data["status"] == "completed"
-    assert backend.execute_attempts == 2  # one queue-full rejection, one success
+    run = snapshot.data["runs"][0]
+    assert run["executionId"] == "exec_2"  # exec_1 died queue-full; resubmitted
+    assert run["metrics"]["kappa"] == 0.5
+    assert backend.execute_attempts == 2
+
+
+async def test_run_experiment_fails_run_after_queue_full_cap(monkeypatch):
+    """Queue-full forever: the run fails with the queue-full error after
+    MAX_SUBMIT_ATTEMPTS submissions (1 initial + retries), and the experiment
+    finalizes failed — not stuck running."""
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    monkeypatch.setattr(campaign, "QUEUE_FULL_BACKOFF_SEC", 0.02)
+    backend = FakeBackend(queue_full_times=campaign.MAX_SUBMIT_ATTEMPTS)
+    async with Client(make_server(backend)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        snapshot = await wait_for_terminal(c, result.data["experimentId"])
+    assert snapshot.data["status"] == "failed"
+    run = snapshot.data["runs"][0]
+    assert run["status"] == "failed"
+    assert campaign._QUEUE_FULL_MARKER in (run["error"] or "")
+    assert backend.execute_attempts == campaign.MAX_SUBMIT_ATTEMPTS
+
+
+async def test_run_experiment_missing_execution_id_fails_run_only(monkeypatch):
+    """A 200 response without an executionId must fail THAT run (a malformed
+    backend answer), not poison the experiment with a "None" execution id
+    that 404s every poll and aborts the remaining runs."""
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(drop_exec_id_first=True, metrics={"exec_2": {"kappa": 0.6}})
+    async with Client(make_server(backend)) as c:
+        result = await c.call_tool(
+            "experiment.run",
+            {
+                "runs": [
+                    {"name": "bad", "train_graph": TRAIN_GRAPH},
+                    {"name": "good", "train_graph": TRAIN_GRAPH},
+                ]
+            },
+        )
+        snapshot = await wait_for_terminal(c, result.data["experimentId"])
+    runs = {run["name"]: run for run in snapshot.data["runs"]}
+    assert runs["bad"]["status"] == "failed"
+    assert runs["bad"]["executionId"] is None
+    assert "executionId" in (runs["bad"]["error"] or "")
+    assert runs["good"]["status"] == "completed"  # sibling run unaffected
+    assert runs["good"]["metrics"]["kappa"] == 0.6
 
 
 async def test_run_experiment_retries_transient_summary_500s(monkeypatch):
@@ -265,3 +345,47 @@ async def test_expired_token_on_result_fetch_is_not_result_fetch_failed(monkeypa
     assert "expired 2 day" in run["error"]
     assert "nimbus-mcp login" in run["error"]
     assert "result fetch failed" not in run["error"]
+
+
+# ── hosted gateway: the worker thread has no request context ───────────────
+# fastmcp's get_http_headers() answers {} outside a request, so a
+# HeaderCredentialClient cannot resolve its per-request token inside the
+# worker. experiment.run must bind a token-owned client (bound_client) before
+# spawning; otherwise every run fails with the gateway setup guidance even
+# though the caller sent the header.
+
+
+def make_header_server(backend: FakeBackend) -> FastMCP:
+    """campaign server behind a HeaderCredentialClient whose header getter
+    answers everywhere EXCEPT the experiment worker thread (where fastmcp
+    reports no request)."""
+
+    def getter() -> dict[str, str]:
+        if threading.current_thread().name.startswith("nimbus-experiment"):
+            return {}
+        return {"x-nimbus-token": "nimb_campaign"}
+
+    def factory(cfg):
+        return NimbusClient(cfg, transport=httpx.MockTransport(backend.handler))
+
+    proxy = HeaderCredentialClient(
+        McpConfig(api_url="http://t", mcp_key="", export_dir=None),  # type: ignore[arg-type]
+        client_factory=factory,
+        headers_getter=getter,
+    )
+    server = FastMCP("t")
+    campaign.register(server, proxy)
+    return server
+
+
+async def test_experiment_run_survives_worker_without_request_context(monkeypatch):
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+    async with Client(make_header_server(backend)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        snapshot = await wait_for_terminal(c, result.data["experimentId"])
+    run = snapshot.data["runs"][0]
+    assert run["status"] == "completed", run
+    assert run["metrics"]["kappa"] == 0.5

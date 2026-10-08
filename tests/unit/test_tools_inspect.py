@@ -203,7 +203,7 @@ async def test_inspect_file_other_403_still_raises():
         return httpx.Response(
             403,
             json={
-                "code": "FREEMIUM_MONTHLY_QUOTA_EXCEEDED",
+                "code": "nimbus.freemium.monthly_quota_exceeded",
                 "detail": "Monthly free training quota exceeded.",
             },
         )

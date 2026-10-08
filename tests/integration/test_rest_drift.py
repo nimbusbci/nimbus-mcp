@@ -33,6 +33,12 @@ MAPPED_PATHS = [
     "/api/projects/{project_id}/doc",
     "/api/upload",
     "/api/data/describe",
+    "/api/me/profile",
+    "/api/calibration-live/{execution_id}",
+    "/api/pause-calibration",
+    "/api/resume-calibration",
+    "/api/mcp/device-code",
+    "/api/mcp/device-token",
 ]
 
 pytestmark = pytest.mark.skipif(os.environ.get("NIMBUS_MCP_E2E") != "1", reason="NIMBUS_MCP_E2E!=1")

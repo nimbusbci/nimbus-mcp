@@ -75,4 +75,4 @@ def test_annotation_policy_invariants():
 def test_tool_count_is_tracked():
     # A new tool must update this number AND pass the suites above — the count
     # is asserted so additions are conscious.
-    assert len(_all_tools()) == 37
+    assert len(_all_tools()) == 39

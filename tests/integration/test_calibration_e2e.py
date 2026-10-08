@@ -9,9 +9,11 @@ this is the local demo gate that proves the full agent loop:
     → execution.results has metrics.kappa.
 
 Auth: calibration graphs carry a ``hardware_device`` node, and node-level
-freemium policy (freemium_execute_gate) applies even to the X-MCP-Key local
-principal — deviceType ``synthetic`` (the calibration templates' default) is
-not on the free allowlist. So the MCP client rides a Bearer JWT minted the
+freemium policy (freemium_execute_gate) applies to the X-MCP-Key local
+principal unless the backend is flagged Pro (``MCP_LOCAL_IS_PRO`` — the
+desktop app sets it for a signed-in Pro session; verified by a live-process
+smoke). This E2E uses the claim-free route instead: the MCP client rides a
+Bearer JWT minted the
 same way the backend integration tests mint theirs (tests/utils/clerk_token
 ``_local_jwks_and_token``: local RS256 keypair, ``pla: u:nimbus_studio_pro``,
 issuer https://clerk.test). The backend must run with::

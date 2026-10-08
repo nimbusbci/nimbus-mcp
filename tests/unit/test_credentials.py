@@ -138,6 +138,70 @@ def test_desktop_only_resolves_local_default_url(tmp_path):
     assert cred.meta["created_at"] == "2026-10-04T00:00:00Z"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Desktop key file optional "port" field (the desktop app may bind 8081/8082)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _write_desktop_key(home: Path, payload: dict) -> Path:
+    return _write_json(desktop_key_path("darwin", env={}, home=home), payload)
+
+
+def test_desktop_key_port_overrides_default_api_url(tmp_path):
+    _write_desktop_key(tmp_path, {"key": "desk-key", "port": 8081})
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "desktop_key"
+    assert cred.api_url == "http://127.0.0.1:8081"
+
+
+def test_desktop_key_without_port_keeps_default_api_url(tmp_path):
+    _write_desktop_key(tmp_path, {"key": "desk-key"})
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "desktop_key"
+    assert cred.api_url == "http://127.0.0.1:8080"
+
+
+def test_env_api_url_beats_desktop_key_port(tmp_path):
+    _write_desktop_key(tmp_path, {"key": "desk-key", "port": 8081})
+    cred = resolve_credential(
+        env={"NIMBUS_API_URL": "https://hosted.api"}, home=tmp_path, platform="darwin"
+    )
+    assert cred.api_url == "https://hosted.api"
+
+
+def test_desktop_key_non_int_port_falls_back_to_default(tmp_path):
+    _write_desktop_key(tmp_path, {"key": "desk-key", "port": "8081"})
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "desktop_key"
+    assert cred.api_url == "http://127.0.0.1:8080"
+
+
+@pytest.mark.parametrize("port", [-1, 0, 65536, 99999])
+def test_desktop_key_out_of_range_port_falls_back_to_default(tmp_path, port):
+    """Only real TCP ports (1-65535) override the default; anything else
+    keeps 8080."""
+    _write_desktop_key(tmp_path, {"key": "desk-key", "port": port})
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "desktop_key"
+    assert cred.api_url == "http://127.0.0.1:8080"
+
+
+@pytest.mark.parametrize("port", [1, 65535])
+def test_desktop_key_boundary_ports_are_honored(tmp_path, port):
+    _write_desktop_key(tmp_path, {"key": "desk-key", "port": port})
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.api_url == f"http://127.0.0.1:{port}"
+
+
+def test_desktop_key_bool_port_falls_back_to_default(tmp_path):
+    """JSON true/false decode to Python bools (a subclass of int) — never a
+    port; the 8080 default stands."""
+    _write_desktop_key(tmp_path, {"key": "desk-key", "port": True})
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "desktop_key"
+    assert cred.api_url == "http://127.0.0.1:8080"
+
+
 def test_nothing_resolves_to_none(tmp_path):
     cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
     assert cred.kind == "none"
@@ -347,3 +411,30 @@ def test_decode_token_claims_tolerant_of_garbage():
     assert decode_token_claims("nimb_###.???._ _") == {}
     # payload that is not a JSON object
     assert decode_token_claims(f"nimb_{_b64url({'a': 1})}.{_b64url([1, 2])}.sig") == {}
+
+
+def test_write_store_surfaces_write_error_not_double_close(tmp_path, monkeypatch):
+    """A failing write must surface the ORIGINAL error. The fd is consumed by
+    fdopen, so the finally-branch closing it again raises EBADF — which used
+    to replace the real cause (e.g. disk full) with 'Bad file descriptor'."""
+    import os
+
+    class FailingFile:
+        def __init__(self, fd: int) -> None:
+            self.fd = fd
+
+        def write(self, data: str) -> int:
+            raise OSError("disk full (simulated)")
+
+        def close(self) -> None:
+            os.close(self.fd)  # the real with-block closes the fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.close()
+
+    monkeypatch.setattr(os, "fdopen", lambda fd, *a, **k: FailingFile(fd))
+    with pytest.raises(OSError, match="disk full"):
+        write_store(token="nimb_x", api_url="http://t", home=tmp_path)

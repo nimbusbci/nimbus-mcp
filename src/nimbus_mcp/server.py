@@ -1,4 +1,4 @@
-"""FastMCP server assembly: one client, thirteen tool modules, stdio transport."""
+"""FastMCP server assembly: one client, fourteen tool modules, stdio transport."""
 
 from __future__ import annotations
 
@@ -7,11 +7,13 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 
+from . import __version__
 from .client import NimbusClient, NullClient
 from .config import load_config
 from .setup_mode import SetupRequired
 from .tools import (
     artifacts,
+    bids,
     build,
     calibration,
     campaign,
@@ -45,6 +47,8 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
 4) Results: execution.results (kappa, ITR, confusion matrix),
    execution.artifacts / execution.download_artifact,
    pipeline.export for a standalone zip.
+4b) Share/audit: bids.export_dataset / bids.export_execution produce BIDS-layout
+   zips with sha256 manifests.
 5) Live (use with care): device.list, device.test, then stream.start(confirm=true) only with
    the user's explicit go-ahead — it connects an EEG device to a human session. An idle
    watchdog stops abandoned sessions; polling stream.status keeps them alive.
@@ -88,7 +92,9 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
             if (config.mcp_key or config.nimbus_token)
             else NullClient(config)  # setup mode: every tool returns guidance
         )
-    mcp = FastMCP("nimbus", instructions=INSTRUCTIONS)
+    # version= so the initialize handshake (serverInfo.version) reports THIS
+    # package's version — FastMCP defaults to advertising its own.
+    mcp = FastMCP("nimbus", version=__version__, instructions=INSTRUCTIONS)
     mcp.add_middleware(SetupGuidanceMiddleware())
     for module in (
         whoami,
@@ -99,6 +105,7 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
         calibration,
         campaign,
         artifacts,
+        bids,
         live,
         telemetry,
         data,

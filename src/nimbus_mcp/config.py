@@ -15,11 +15,21 @@ __all__ = [
     "DEFAULT_API_URL",
     "DEFAULT_EXPORT_DIR",
     "McpConfig",
+    "default_export_dir",
     "load_config",
     "missing_credential_error",
 ]
 
-DEFAULT_EXPORT_DIR = Path.home() / "nimbus-exports"
+
+def default_export_dir() -> Path:
+    """``$HOME/nimbus-exports``, resolved at CALL time so a HOME that changed
+    after import (tests, service users) is honored — one definition; the
+    constant below and load_config both derive from it."""
+    return Path.home() / "nimbus-exports"
+
+
+# Import-time snapshot kept for backwards compat; prefer default_export_dir().
+DEFAULT_EXPORT_DIR = default_export_dir()
 
 
 @dataclass(frozen=True)
@@ -56,10 +66,8 @@ def load_config(env: Mapping[str, str] | None = None) -> McpConfig:
     return McpConfig(
         api_url=(cred.api_url or DEFAULT_API_URL).rstrip("/"),
         mcp_key=mcp_key,
-        # Default computed per call (not the import-time constant) so a changed
-        # HOME — tests, service users — resolves consistently with the store.
         export_dir=Path(
-            env.get("NIMBUS_EXPORT_DIR") or str(Path.home() / "nimbus-exports")
+            env.get("NIMBUS_EXPORT_DIR") or str(default_export_dir())
         ).expanduser(),
         nimbus_token=nimbus_token,
         credential_meta=dict(cred.meta),

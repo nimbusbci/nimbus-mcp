@@ -432,3 +432,70 @@ async def test_train_refuses_incomplete_session():
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="calibration.status"):
             await c.call_tool("calibration.train", {"execution_id": "exec_2"})
+
+
+# ── connection canonicalization ────────────────────────────────────────────
+# The execute request's GraphConnection is extra="forbid" with only {from, to}
+# (backend contracts/pipeline.py), but canvas-style templates (sart,
+# target_hit) carry sourceHandle/targetHandle on their connections. The graph
+# section must canonicalize or calibration.start 422s before any route code.
+
+HANDLE_TEMPLATE = {
+    "template": {
+        "id": "sart_calibration",
+        "name": "SART calibration",
+        "version": "3",
+        "calibrate": {
+            "nodes": [
+                {"id": "device", "type": "hardware_device", "config": {}},
+                {"id": "recorder", "type": "calibration_recorder", "config": {}},
+            ],
+            "connections": [
+                {
+                    "from": "device",
+                    "to": "recorder",
+                    "sourceHandle": "sidecar_meta",
+                    "targetHandle": "behavioral_sidecar",
+                }
+            ],
+        },
+    }
+}
+
+
+async def test_start_posts_clean_connections_for_handle_templates():
+    """sart/target_hit-style templates (canvas handles on connections) must
+    start: the posted train graph carries connections as {from, to} only."""
+    seen: dict[str, httpx.Request] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen[req.url.path] = req
+        if req.url.path == "/api/templates/sart_calibration":
+            return httpx.Response(200, json=HANDLE_TEMPLATE)
+        if req.url.path == "/api/execute":
+            return httpx.Response(200, json={"ok": True, "executionId": "exec_sart"})
+        raise AssertionError(req.url.path)
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool("calibration.start", {"paradigm": "sart", "confirm": True})
+    assert result.data["started"] is True and result.data["executionId"] == "exec_sart"
+    graph = json.loads(seen["/api/execute"].read())["train"]
+    assert graph["connections"] == [{"from": "device", "to": "recorder"}]
+
+
+def test_graph_section_strips_connection_handles():
+    section = calibration._graph_section(
+        HANDLE_TEMPLATE["template"], "calibrate", "sart_calibration"
+    )
+    assert section["connections"] == [{"from": "device", "to": "recorder"}]
+
+
+def test_graph_section_rejects_connection_missing_endpoints():
+    """A connection without from/to is a broken template: raise rather than
+    silently drop the edge — a missing edge would train a wrong pipeline."""
+    broken = {
+        "nodes": [{"id": "a", "type": "x", "config": {}}],
+        "connections": [{"from": "a", "sourceHandle": "h"}],
+    }
+    with pytest.raises(calibration.McpToolError, match="connection"):
+        calibration._graph_section({"calibrate": broken}, "calibrate", "t")

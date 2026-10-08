@@ -3,7 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from nimbus_mcp.client import McpToolError, NimbusClient
+from nimbus_mcp.client import QUOTA_PRICING_URL, McpToolError, NimbusClient
 from nimbus_mcp.config import McpConfig
 
 
@@ -110,15 +110,18 @@ def test_403_surfaces_backend_detail_not_auth_hint():
 
 
 # ── v0.5: quota 403s carry the pricing deep-link (appended in _backend_error) ──
+# The codes are the backend's dotted wire values (utils/api_codes.py):
+# FREEMIUM_MONTHLY_QUOTA_EXCEEDED = "nimbus.freemium.monthly_quota_exceeded",
+# RUNTIME_PAID_TIER_REQUIRED = "nimbus.runtime.paid_tier_required".
 
 
 @pytest.mark.parametrize(
     "code",
-    ["FREEMIUM_MONTHLY_QUOTA_EXCEEDED", "RUNTIME_PAID_TIER_REQUIRED"],
+    ["nimbus.freemium.monthly_quota_exceeded", "nimbus.runtime.paid_tier_required"],
 )
 def test_quota_403_appends_pricing_link(code):
     """The backend's quota denials are flat RFC7807 bodies with a top-level
-    code — both get the ?reason=mcp-quota link appended to the message."""
+    dotted code — both get the ?reason=mcp-quota link appended to the message."""
     c = make_client(
         lambda req: httpx.Response(
             403,
@@ -133,25 +136,27 @@ def test_quota_403_appends_pricing_link(code):
         c.post("/api/execute", json={})
     msg = str(excinfo.value)
     assert "Monthly free training quota exceeded." in msg
-    assert "https://studio.nimbusbci.com/pricing?reason=mcp-quota" in msg
+    assert QUOTA_PRICING_URL in msg
 
 
 def test_quota_403_nested_detail_code_also_gets_link():
     c = make_client(
         lambda req: httpx.Response(
             403,
-            json={"detail": {"code": "FREEMIUM_MONTHLY_QUOTA_EXCEEDED", "detail": "over"}},
+            json={"detail": {"code": "nimbus.freemium.monthly_quota_exceeded", "detail": "over"}},
         )
     )
     with pytest.raises(McpToolError, match=r"pricing\?reason=mcp-quota"):
         c.post("/api/experiment/run", json={})
 
 
-def test_non_quota_403_gets_no_pricing_link():
-    c = make_client(lambda req: httpx.Response(403, json={"code": "SOME_OTHER_CODE"}))
+def test_non_quota_dotted_403_gets_no_pricing_link():
+    """A dotted code that is not one of the two quota denials stays link-free."""
+    c = make_client(lambda req: httpx.Response(403, json={"code": "nimbus.other.code"}))
     with pytest.raises(McpToolError) as excinfo:
         c.post("/api/execute", json={})
     assert "pricing" not in str(excinfo.value)
+    assert QUOTA_PRICING_URL not in str(excinfo.value)
 
 
 def test_backend_error_detail_surfaced():
@@ -237,3 +242,15 @@ def test_backend_error_code_is_none_without_problem_body():
         c.get("/api/data/describe")
     assert excinfo.value.status_code == 500
     assert excinfo.value.code is None
+
+
+def test_bound_client_yields_self_and_never_closes():
+    """bound_client(): worker-context protocol. The plain client is
+    context-free, so it yields itself and MUST NOT close on context exit —
+    it is the process-wide client the server was built with (the hosted
+    wrapper instead yields a fresh per-token client it closes on exit)."""
+    client = make_client(lambda req: httpx.Response(200, json={"ok": True}))
+    with client.bound_client() as bound:
+        assert bound is client
+    # Still usable after the context exits — a closed httpx client would raise.
+    assert client.get("/api/anything") == {"ok": True}

@@ -2,7 +2,8 @@
 
 <!-- mcp-name: io.github.nimbusbci/nimbus-mcp -->
 
-[![smithery badge](https://smithery.ai/badge/nimbusbci/nimbus-mcp)](https://smithery.ai/servers/nimbusbci/nimbus-mcp)
+<!-- smithery badge: their /badge/ endpoint 500s platform-wide (2026-10-07); shields.io image + link keeps the badge rendering -->
+[![smithery badge](https://img.shields.io/badge/smithery-nimbusbci%2Fnimbus--mcp-2EA043)](https://smithery.ai/servers/nimbusbci/nimbus-mcp)
 
 MCP server that lets AI agents (Claude Code, Cursor, Claude Desktop) build, validate,
 run, and analyze Nimbus BCI pipelines — upload their own EEG data, persist pipelines
@@ -150,7 +151,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 37 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 39 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -201,7 +202,7 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (37)
+## Tools (39)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
@@ -216,6 +217,9 @@ Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
 Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
 `calibration.pause`, `calibration.resume`, `calibration.train`
 Projects: `project.create`, `project.list`, `project.save`, `project.load`
+BIDS: `bids.export_dataset` (pack / upload / recording → BIDS-layout zip;
+continuous → BIDS-raw, epoched → BIDS-derivatives), `bids.export_execution`
+(results bundle: metrics, participants.tsv, protocol, pipeline snapshot)
 
 Not sure which pipeline to build? `catalog.leaderboard()` ranks benchmarked pipelines
 per dataset (`meanAccuracyPct` desc, 95% CI) under the canonical `within_session`
@@ -368,7 +372,9 @@ rewired onto the recorded upload (`custom_data` source pinned to the
 the device goes on a human's head; call `device.test` first.
 
 Pro plan required — calibration workflows and custom-data training are
-freemium-gated (free-tier requests are 403 by the node policy).
+freemium-gated (free-tier requests are 403 by the node policy). Local
+`X-MCP-Key` principals pass when the desktop app flags the signed-in Pro
+session (`MCP_LOCAL_IS_PRO`); otherwise the node policy applies to them too.
 
 The calibrate→train handoff requires a Postgres-backed backend (hosted or local
 dev): a desktop-local session completes and records, but its upload can't be

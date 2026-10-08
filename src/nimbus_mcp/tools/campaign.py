@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from statistics import fmean, pstdev
 from typing import Any
@@ -46,6 +47,7 @@ class RunRow:
     status: str = "pending"  # pending | running | completed | failed
     error: str | None = None
     metrics: dict[str, Any] | None = None
+    submit_attempts: int = 0  # submissions used (queue-full retries included)
 
 
 class ExperimentState:
@@ -104,29 +106,30 @@ EXPERIMENTS = Experiments()
 
 
 def _submit_run(run: RunRow, client: NimbusClient) -> None:
-    """POST /api/execute with queue-full retry/backoff; marks the run failed
-    on a non-retryable error or after MAX_SUBMIT_ATTEMPTS queue-full hits."""
+    """POST /api/execute once; marks the run failed on an error or on a
+    malformed 200 (no executionId — failing only THIS run, not the
+    experiment). Queue-full is never an HTTP error: POST answers 200
+    immediately and the backend's concurrency gate reports "Execution queue
+    full" later via the polled summary — _drive resubmits there."""
     body: dict[str, Any] = {
         "train": run.train_graph,
         "layout": synth_layout(run.train_graph),
         "name": run.name,
     }
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            payload = client.post("/api/execute", json=body)
-        except McpToolError as err:
-            last_error = str(err)
-            if _QUEUE_FULL_MARKER in last_error and attempt < MAX_SUBMIT_ATTEMPTS:
-                time.sleep(QUEUE_FULL_BACKOFF_SEC)
-                continue
-            run.status = "failed"
-            run.error = last_error
-            return
-        run.execution_id = str(payload.get("executionId"))
-        run.status = "running"
+    run.submit_attempts += 1
+    try:
+        payload = client.post("/api/execute", json=body)
+    except McpToolError as err:
+        run.status = "failed"
+        run.error = str(err)
         return
+    exec_id = payload.get("executionId")
+    if not isinstance(exec_id, str) or not exec_id:
+        run.status = "failed"
+        run.error = "backend accepted the run but returned no executionId"
+        return
+    run.execution_id = exec_id
+    run.status = "running"
 
 
 def _fetch_metrics(exec_id: str, client: NimbusClient) -> dict[str, Any] | None:
@@ -193,8 +196,19 @@ def _drive(state: ExperimentState, client: NimbusClient) -> None:
                     run.status = "completed"
                 del in_flight[exec_id]
             elif status in _TERMINAL:  # failed | cancelled
+                error = summary.get("errorMessage") or f"terminal status: {status}"
+                if _QUEUE_FULL_MARKER in error and run.submit_attempts < MAX_SUBMIT_ATTEMPTS:
+                    # The concurrency gate rejected the run via the summary
+                    # (status failed, errorMessage queue-full) — back off and
+                    # resubmit the same run as a new execution.
+                    del in_flight[exec_id]
+                    time.sleep(QUEUE_FULL_BACKOFF_SEC)
+                    _submit_run(run, client)
+                    if run.execution_id is not None and run.execution_id != exec_id:
+                        in_flight[run.execution_id] = run
+                    continue
                 run.status = "failed"
-                run.error = summary.get("errorMessage") or f"terminal status: {status}"
+                run.error = error
                 del in_flight[exec_id]
 
 
@@ -221,24 +235,32 @@ def _compute_aggregates(runs: list[RunRow]) -> dict[str, Any]:
     return aggregates
 
 
-def _experiment_worker(state: ExperimentState, client: NimbusClient) -> None:
+def _experiment_worker(
+    state: ExperimentState,
+    binding: AbstractContextManager[NimbusClient],
+) -> None:
     """Background thread body: drive the experiment, then finalize status and
-    aggregates. Any unexpected error (e.g. backend gone mid-run) fails the
-    still-open runs instead of leaving the experiment 'running' forever."""
-    try:
-        _drive(state, client)
-    except Exception as err:
-        with EXPERIMENTS.lock:
-            for run in state.runs:
-                if run.status not in ("completed", "failed"):
-                    run.status = "failed"
-                    run.error = f"experiment aborted: {err}"
-    finally:
-        with EXPERIMENTS.lock:
-            state.aggregates = _compute_aggregates(state.runs)
-            state.status = (
-                "failed" if all(run.status == "failed" for run in state.runs) else "completed"
-            )
+    aggregates. The binding owns the worker's client lifetime — the hosted
+    wrapper yields a per-token client (closed here on exit; the worker has no
+    request context to resolve headers in), a plain client yields the shared
+    singleton (never closed). Any unexpected error (e.g. backend gone
+    mid-run) fails the still-open runs instead of leaving the experiment
+    'running' forever."""
+    with binding as client:
+        try:
+            _drive(state, client)
+        except Exception as err:
+            with EXPERIMENTS.lock:
+                for run in state.runs:
+                    if run.status not in ("completed", "failed"):
+                        run.status = "failed"
+                        run.error = f"experiment aborted: {err}"
+        finally:
+            with EXPERIMENTS.lock:
+                state.aggregates = _compute_aggregates(state.runs)
+                state.status = (
+                    "failed" if all(run.status == "failed" for run in state.runs) else "completed"
+                )
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
@@ -287,9 +309,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             max_in_flight=max(1, min(max_concurrent, MAX_IN_FLIGHT)),
         )
         EXPERIMENTS.add(state)
+        # Bind BEFORE spawning: the worker thread has no MCP request context
+        # (fastmcp's header lookup answers {} there), so a request-scoped
+        # client — the hosted gateway — cannot resolve its per-request token
+        # mid-experiment. bound_client() runs here, inside the request.
+        worker_binding = client.bound_client()
         threading.Thread(
             target=_experiment_worker,
-            args=(state, client),
+            args=(state, worker_binding),
             name=f"nimbus-experiment-{experiment_id[:8]}",
             daemon=True,
         ).start()

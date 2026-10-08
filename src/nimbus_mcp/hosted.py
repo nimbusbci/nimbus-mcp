@@ -1,6 +1,6 @@
 """Hosted gateway: streamable-HTTP transport with per-request credentials.
 
-``nimbus-mcp serve`` runs the same 37 tools over streamable HTTP so remote
+``nimbus-mcp serve`` runs the same 39 tools over streamable HTTP so remote
 MCP clients (and registries such as Smithery) can connect by URL. The
 gateway process itself holds NO credential: each request's Nimbus API token
 arrives as an MCP client header (``X-Nimbus-Token: nimb_…`` or
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,18 @@ def hosted_setup_guidance(**extra: Any) -> dict[str, Any]:
     return guidance
 
 
+def _default_headers_getter() -> dict[str, str]:
+    """fastmcp's get_http_headers strips credential headers (authorization,
+    cookie) by default, which would make the Bearer form below unreachable on
+    the real gateway — request authorization explicitly. ``include`` is
+    absent on fastmcp <2.10: degrade to the plain call there (X-Nimbus-Token
+    resolution is unaffected)."""
+    try:
+        return get_http_headers(include={"authorization"})
+    except TypeError:
+        return get_http_headers()
+
+
 class HeaderCredentialClient:
     """Request-scoped credential resolution over one shared config.
 
@@ -90,7 +103,7 @@ class HeaderCredentialClient:
         self,
         config: McpConfig,
         client_factory: Callable[[McpConfig], NimbusClient] = NimbusClient,
-        headers_getter: Callable[[], dict[str, str]] = get_http_headers,
+        headers_getter: Callable[[], dict[str, str]] = _default_headers_getter,
         max_clients: int = 32,
     ) -> None:
         self.config = config
@@ -99,11 +112,14 @@ class HeaderCredentialClient:
         self._max_clients = max_clients
         self._lock = threading.Lock()
         self._clients: dict[str, NimbusClient] = {}
+        # Evicted-but-unclosed clients (see _client_for): closed by the NEXT
+        # eviction, giving in-flight requests a full cycle to drain.
+        self._retired: list[NimbusClient] = []
 
     # ── credential resolution ─────────────────────────────────────────────
 
     def _current_token(self) -> str | None:
-        """The request's token: X-Nimbus-Token, or Authorization: Bearer …).
+        """The request's token: X-Nimbus-Token, or Authorization: Bearer ….
 
         Returns the startup ``NIMBUS_TOKEN`` fallback (single-tenant
         self-hosting) when the request carries neither header. Header keys
@@ -122,26 +138,48 @@ class HeaderCredentialClient:
             return token.strip()
         return self.config.nimbus_token or None
 
+    def _build_token_client(self, token: str) -> NimbusClient:
+        return self._client_factory(
+            replace(
+                self.config,
+                nimbus_token=token,
+                mcp_key="",
+                credential_meta={"source": "header"},
+            )
+        )
+
     def _client_for(self, token: str) -> NimbusClient:
         with self._lock:
             client = self._clients.get(token)
             if client is None:
                 # Bounded: an unbounded map would leak a client (and socket)
-                # per distinct token; clear-all is the simplest safe cap.
+                # per distinct token. Eviction must NOT close the current
+                # set's clients outright — another request may be mid-flight
+                # on them — so they are retired (references dropped) now and
+                # closed by the NEXT eviction, which gives them a full cycle
+                # to drain.
                 if len(self._clients) >= self._max_clients:
-                    for stale in self._clients.values():
-                        stale.close()
+                    previously_retired = self._retired
+                    self._retired = list(self._clients.values())
                     self._clients.clear()
-                client = self._client_factory(
-                    replace(
-                        self.config,
-                        nimbus_token=token,
-                        mcp_key="",
-                        credential_meta={"source": "header"},
-                    )
-                )
+                    for stale in previously_retired:
+                        stale.close()
+                client = self._build_token_client(token)
                 self._clients[token] = client
             return client
+
+    def bound_client(self) -> Any:
+        """A context manager yielding a NimbusClient bound to the CURRENT
+        request's token, for code that outlives the request context (e.g.
+        campaign's worker thread): fastmcp's header lookup answers {} there,
+        so per-request resolution cannot run. The yielded client is fresh and
+        worker-owned — never shared through the cache, so eviction cannot
+        close it mid-experiment — and is closed when the context exits.
+        Raises SetupRequired (hosted guidance) when no token is resolvable."""
+        token = self._current_token()
+        if not token:
+            raise SetupRequired(hosted_setup_guidance())
+        return closing(self._build_token_client(token))
 
     def _translate(self, err: SetupRequired) -> SetupRequired:
         """Re-flavor a per-token client's setup payload for gateway users.
@@ -203,3 +241,6 @@ class HeaderCredentialClient:
             for client in self._clients.values():
                 client.close()
             self._clients.clear()
+            for stale in self._retired:
+                stale.close()
+            self._retired.clear()
