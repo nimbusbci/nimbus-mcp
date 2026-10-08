@@ -32,6 +32,7 @@ MAPPED_PATHS = [
     "/api/projects",
     "/api/projects/{project_id}/doc",
     "/api/upload",
+    "/api/python-model/validate",
     "/api/data/describe",
     "/api/me/profile",
     "/api/calibration-live/{execution_id}",

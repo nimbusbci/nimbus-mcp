@@ -23,6 +23,7 @@ from .tools import (
     leaderboard,
     live,
     projects,
+    python,
     run,
     telemetry,
     whoami,
@@ -55,6 +56,9 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
 6) Personal calibration: calibration.start(confirm=true) while the subject wears the device —
    the Studio app shows cues; calibration.status polls; calibration.train turns the recording
    into the subject's own classifier.
+7) BYO model code: python.validate(script) statically checks a python_model class
+   (fit/predict contract, no execution), then run it via execution.run with the code
+   inline in the node config — desktop app only (isolated local worker).
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 
@@ -111,6 +115,7 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
         data,
         inspect,
         projects,
+        python,
     ):
         module.register(mcp, client)
     return mcp
