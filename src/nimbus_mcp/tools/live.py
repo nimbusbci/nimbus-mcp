@@ -11,7 +11,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from ..client import NimbusClient
+from ..client import McpToolError, NimbusClient
 from ..setup_mode import SetupRequired
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
 from ._guards import safe_segment
@@ -188,10 +188,33 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             body["sessionId"] = session_id
         connect = client.post("/api/hardware/connect", json=body)
         session_id = connect.get("sessionId")
-        started = client.post(
-            "/api/hardware/start-stream",
-            json={"sessionId": session_id, "chunkSize": chunk_size, "nChannels": n_channels},
-        )
+        try:
+            started = client.post(
+                "/api/hardware/start-stream",
+                json={"sessionId": session_id, "chunkSize": chunk_size, "nChannels": n_channels},
+            )
+        except McpToolError as err:
+            # start-stream failed AFTER a successful connect: without cleanup
+            # the device stays connected on the user's head with no watchdog
+            # armed and no sessionId surfaced. Best-effort disconnect, then
+            # re-raise carrying the outcome (and the id when a manual
+            # stream.stop is still needed).
+            note = ""
+            if session_id:
+                try:
+                    client.post("/api/hardware/disconnect", json={"sessionId": session_id})
+                    note = f" The just-connected session {session_id} was disconnected."
+                except Exception as disc_err:  # best-effort: raise the original cause
+                    note = (
+                        f" Disconnecting session {session_id} also failed ({disc_err})"
+                        " — it may still be connected; recover with"
+                        f" stream.stop(session_id='{session_id}')."
+                    )
+            raise McpToolError(
+                f"stream.start failed after connecting the device ({err}).{note}",
+                status_code=getattr(err, "status_code", None),
+                code=getattr(err, "code", None),
+            ) from err
         if session_id is not None and idle_timeout_sec > 0:
             from . import activity  # imported here to keep the module graph acyclic
 
@@ -212,6 +235,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                     watch_id,
                     lambda: _stop_chain_via(binding, watch_id),
                     float(idle_timeout_sec),
+                    # Hosted bindings own a fresh per-token client: an explicit
+                    # stream.stop or a replacement registration must close it
+                    # even though the with-block inside _stop_chain_via never
+                    # ran. Local-mode bindings expose no discard → None.
+                    on_discard=getattr(binding, "discard", None),
                 )
         return {
             "started": bool(started.get("started")),

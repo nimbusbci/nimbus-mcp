@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import httpx
@@ -97,3 +98,37 @@ async def test_validate_oversized_code_short_circuits():
         result = await c.call_tool("python.validate", {"code": "x" * (256 * 1024 + 1)})
     assert result.data["ok"] is False
     assert "exceeds" in result.data["error"]
+
+
+async def test_validate_rejects_multibyte_over_byte_limit_without_http():
+    """The pre-check counts UTF-8 BYTES like the backend (MAX_CODE_BYTES), not
+    chars: 200k 'é' are 200k chars (under the old char cap) but 400k bytes
+    (over the shared 256KiB limit). Over-limit must fail locally with zero
+    HTTP calls — the old char-based check sent it to the backend to fail with
+    a differently-worded error."""
+    sent = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        sent.append(req.url.path)
+        return httpx.Response(200, json={"ok": True})
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool("python.validate", {"code": "é" * 200_000})
+    assert sent == []  # rejected before any HTTP call
+    assert result.data["ok"] is False
+    assert "256 KB" in result.data["error"]
+
+
+async def test_validate_multibyte_within_limit_posts_through():
+    """Multibyte code under the byte limit reaches the backend unchanged."""
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(req.read())
+        return httpx.Response(200, json={"ok": True, "className": "MyModel"})
+
+    code = "# commentaire étranger\n" + GOOD_CODE
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool("python.validate", {"code": code})
+    assert seen["body"]["code"] == code
+    assert result.data["ok"] is True

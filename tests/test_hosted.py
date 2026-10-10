@@ -277,6 +277,19 @@ def test_bound_client_headerless_raises_guidance() -> None:
     assert err.value.guidance["setupRequired"] is True
 
 
+def test_bound_client_discard_closes_without_the_context_running() -> None:
+    """A watch that goes away WITHOUT the with-block ever running (explicit
+    stream.stop, replacement registration) must still release the fresh
+    per-token client: bound_client() exposes discard() for exactly that."""
+    headers: dict[str, str] = {"x-nimbus-token": "nimb_disc"}
+    proxy, made = _client(headers)
+
+    binding = proxy.bound_client()
+    binding.discard()  # never entered — closed by the discard alone
+    assert any(call == ("close", ()) for client in made for call in client.calls)
+    binding.discard()  # idempotent
+
+
 # ── eviction must not close clients other threads are using ────────────────
 
 def test_eviction_retires_before_closing() -> None:

@@ -591,3 +591,39 @@ def test_serve_signature_default_is_the_loopback_constant():
 
     assert DEFAULT_SERVE_HOST == "127.0.0.1"
     assert inspect.signature(serve).parameters["host"].default == DEFAULT_SERVE_HOST
+
+
+def test_serve_bad_port_env_fails_clean(monkeypatch, capsys):
+    """A non-numeric NIMBUS_MCP_PORT is a config error printed as one line,
+    not a ValueError traceback (guarded like _poll_interval)."""
+    import nimbus_mcp.server as server_mod
+
+    called: list = []
+    monkeypatch.setattr(server_mod, "serve", lambda **kw: called.append(kw))
+    monkeypatch.setenv("NIMBUS_MCP_PORT", "not-a-number")
+    rc = cli.main(["serve"])
+    assert rc == 1
+    assert called == []  # the server never started
+    assert "NIMBUS_MCP_PORT" in capsys.readouterr().out
+
+
+def test_serve_port_env_used(monkeypatch):
+    import nimbus_mcp.server as server_mod
+
+    captured: dict = {}
+    monkeypatch.setattr(server_mod, "serve", lambda **kw: captured.update(kw))
+    monkeypatch.setenv("NIMBUS_MCP_PORT", "9999")
+    cli.main(["serve"])
+    assert captured["port"] == 9999
+
+
+def test_serve_port_zero_is_explicit(monkeypatch):
+    """--port 0 (ephemeral) must reach serve as 0 — a falsy-value `or`
+    fallthrough would silently substitute the default instead."""
+    import nimbus_mcp.server as server_mod
+
+    captured: dict = {}
+    monkeypatch.setattr(server_mod, "serve", lambda **kw: captured.update(kw))
+    monkeypatch.delenv("NIMBUS_MCP_PORT", raising=False)
+    cli.main(["serve", "--port", "0"])
+    assert captured["port"] == 0

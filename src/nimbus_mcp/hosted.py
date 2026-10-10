@@ -88,6 +88,18 @@ def _default_headers_getter() -> dict[str, str]:
         return get_http_headers()
 
 
+class _OwnedClientBinding(closing[NimbusClient]):
+    """What :meth:`HeaderCredentialClient.bound_client` returns: a context
+    manager owning a fresh per-token client — closed on normal exit AND on
+    :meth:`discard`. The discard hook is for consumers whose watch can go
+    away WITHOUT the with-block ever running (the live watchdog's binding is
+    only entered when the idle timeout fires; an explicit stream.stop or a
+    replacement registration would otherwise drop the client unclosed)."""
+
+    def discard(self) -> None:
+        self.thing.close()
+
+
 class HeaderCredentialClient:
     """Request-scoped credential resolution over one shared config.
 
@@ -220,7 +232,7 @@ class HeaderCredentialClient:
         token = self._current_token()
         if not token:
             raise SetupRequired(hosted_setup_guidance())
-        return closing(self._build_token_client(token))
+        return _OwnedClientBinding(self._build_token_client(token))
 
     def _translate(self, err: SetupRequired) -> SetupRequired:
         """Re-flavor a per-token client's setup payload for gateway users.

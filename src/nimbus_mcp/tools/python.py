@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 from ..client import NimbusClient
 from ._annotations import READ_ONLY
 
-_MAX_CODE_CHARS = 256 * 1024
+_MAX_CODE_BYTES = 256 * 1024  # mirrors the backend's MAX_CODE_BYTES (UTF-8)
 
 _USAGE = (
     "Fix the reported issues, then embed the code in a python_model node config "
@@ -35,7 +35,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         missing methods, or the wrong class name cheaply.
 
         Args:
-            code: Python source of the model class (<=256KB).
+            code: Python source of the model class (<=256KB UTF-8).
             class_name: Contract class to instantiate; omit to auto-detect the
                 first class defining fit+predict.
         """
@@ -47,10 +47,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "warnings": [],
                 "usage": _USAGE,
             }
-        if len(code) > _MAX_CODE_CHARS:
+        # Byte-based, matching the backend's limit: a char-based pre-check
+        # would let multibyte scripts pass here and fail remotely with a
+        # differently-worded error (one wasted round trip). errors="replace"
+        # keeps lone surrogates from crashing the pre-check itself.
+        if len(code.encode("utf-8", errors="replace")) > _MAX_CODE_BYTES:
             return {
                 "ok": False,
-                "error": f"code exceeds {_MAX_CODE_CHARS // 1024} KB.",
+                "error": f"code exceeds {_MAX_CODE_BYTES // 1024} KB (UTF-8 bytes).",
                 "warnings": [],
                 "usage": _USAGE,
             }

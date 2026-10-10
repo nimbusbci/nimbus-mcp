@@ -97,12 +97,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         (upload the file first or switch to a local backend).
 
         Args:
-            path: ABSOLUTE filesystem path (local backends only) or the RELATIVE
-                upload path returned by data.upload (works on any backend).
+            path: ABSOLUTE filesystem path (`~` is expanded; local backends
+                only) or the RELATIVE upload path returned by data.upload
+                (works on any backend).
         """
-        source = "local" if os.path.isabs(os.path.expanduser(path)) else "upload"
+        # One expansion used for BOTH the classification and the wire: the
+        # backend's local resolver demands an absolute path, and a raw "~/…"
+        # input classified as local but sent unexpanded would be a 400 for a
+        # file that exists (same contract as data.upload).
+        resolved = os.path.expanduser(path)
+        source = "local" if os.path.isabs(resolved) else "upload"
         try:
-            return client.get("/api/data/describe", params={"source": source, "path": path})
+            return client.get("/api/data/describe", params={"source": source, "path": resolved})
         except McpToolError as err:
             if source == "local" and err.status_code == 403 and err.code == _LOCAL_FORBIDDEN_CODE:
                 # Hosted backend: setup-style guidance instead of a dead end.

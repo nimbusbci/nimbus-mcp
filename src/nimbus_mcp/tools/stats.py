@@ -10,6 +10,8 @@ from ..client import McpToolError, NimbusClient
 from ._annotations import READ_ONLY
 from ._guards import safe_segment
 
+MAX_EXECUTIONS = 25  # mirrored from the backend's grouped-stats request model
+
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
     @mcp.tool(name="stats.grouped", annotations=READ_ONLY)
@@ -32,7 +34,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """
         if not execution_ids:
             raise McpToolError("execution_ids must contain at least one id.")
-        ids = [safe_segment(x, label="execution id") for x in execution_ids][:25]
+        if len(execution_ids) > MAX_EXECUTIONS:
+            # Refuse loudly instead of silently trimming: a pooled mean/t-test
+            # over an arbitrary subset reported as the full result is exactly
+            # the confidently-wrong number this tool exists to prevent.
+            raise McpToolError(
+                f"stats.grouped accepts at most {MAX_EXECUTIONS} execution ids "
+                f"(got {len(execution_ids)}). Split the comparison into batches."
+            )
+        ids = [safe_segment(x, label="execution id") for x in execution_ids]
         body: dict[str, Any] = {"executionIds": ids}
         if chance is not None:
             body["chance"] = chance

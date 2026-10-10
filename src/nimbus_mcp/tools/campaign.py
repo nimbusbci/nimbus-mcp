@@ -33,6 +33,12 @@ MAX_POLL_ATTEMPTS = 3
 POLL_RETRY_BACKOFF_SEC = 2.0
 MAX_RUNS = 25
 MAX_IN_FLIGHT = 2
+# Registry cap: each state holds up to 25 run rows with the full posted
+# train_graph (tens of KB each), so on a long-lived hosted gateway the map
+# must evict — oldest TERMINAL experiments go first; a still-running
+# experiment is never evicted while it can still be polled to a terminal
+# state by its own worker.
+MAX_EXPERIMENTS = 64
 
 _AGGREGATE_METRICS = ("accuracyPct", "evalAccuracyPct", "kappa", "itr")
 _QUEUE_FULL_MARKER = "Execution queue full"
@@ -102,6 +108,22 @@ class Experiments:
     def add(self, state: ExperimentState, fingerprint: str) -> None:
         with self.lock:
             self._states[self.key(fingerprint, state.experiment_id)] = state
+            self._evict_locked()
+
+    def _evict_locked(self) -> None:
+        """Drop the oldest terminal experiments while over MAX_EXPERIMENTS
+        (insertion order = registration order). A terminal state can only be
+        re-read via experiment.get — pollers hold the id and learn the result
+        before their experiment leaves the running workers' hands; the cap is
+        generous (64), so eviction only bites a long-lived gateway process.
+        Called with the lock held."""
+        if len(self._states) <= MAX_EXPERIMENTS:
+            return
+        for key, state in list(self._states.items()):
+            if len(self._states) <= MAX_EXPERIMENTS:
+                break
+            if state.status in _TERMINAL:
+                del self._states[key]
 
     def snapshot(self, fingerprint: str, experiment_id: str) -> dict[str, Any] | None:
         with self.lock:

@@ -26,6 +26,12 @@ class _WatchState:
     timeout_sec: float
     last_activity: float = field(default_factory=time.monotonic)
     stop_called: bool = False
+    # Released when the watch goes away WITHOUT stop_fn's own cleanup having
+    # run (explicit stop / replacement registration): the live watchdog's
+    # hosted binding closes its per-token client there. Local-mode bindings
+    # expose no discard and pass None — the shared client must never be
+    # closed by watchdog lifecycle.
+    on_discard: Callable[[], None] | None = None
 
 
 _LOCK = threading.Lock()
@@ -34,12 +40,34 @@ _WAKE = threading.Event()
 _CHECKER_THREAD: threading.Thread | None = None
 
 
-def register_started(session_id: str, stop_fn: Callable[[], object], timeout_sec: float) -> None:
-    """Track a live session; timeout_sec <= 0 disables the watchdog for it."""
+def _release(state: _WatchState) -> None:
+    """Best-effort on_discard for a watch leaving the registry."""
+    if state.on_discard is None:
+        return
+    try:
+        state.on_discard()
+    except Exception:
+        pass  # lifecycle cleanup must never crash the watchdog or the caller
+
+
+def register_started(
+    session_id: str,
+    stop_fn: Callable[[], object],
+    timeout_sec: float,
+    on_discard: Callable[[], None] | None = None,
+) -> None:
+    """Track a live session; timeout_sec <= 0 disables the watchdog for it.
+    Re-registering the same session replaces the watch and releases the
+    previous one's on_discard (its binding never fired and never will)."""
     if timeout_sec is None or timeout_sec <= 0:
         return
     with _LOCK:
-        _SESSIONS[session_id] = _WatchState(stop_fn=stop_fn, timeout_sec=float(timeout_sec))
+        previous = _SESSIONS.pop(session_id, None)
+        _SESSIONS[session_id] = _WatchState(
+            stop_fn=stop_fn, timeout_sec=float(timeout_sec), on_discard=on_discard
+        )
+    if previous is not None:
+        _release(previous)
     # Wake the checker so a fresh registration is observed promptly (and so a
     # checker mid-sleep on a stale interval re-reads CHECK_INTERVAL_SEC).
     _WAKE.set()
@@ -55,9 +83,13 @@ def note_activity(session_id: str) -> None:
 
 
 def unregister(session_id: str) -> None:
-    """Drop a session from the watchdog (idempotent; used by stream.stop)."""
+    """Drop a session from the watchdog (idempotent; used by stream.stop).
+    Releases the watch's on_discard — an explicitly stopped session's binding
+    will never be entered by the checker."""
     with _LOCK:
-        _SESSIONS.pop(session_id, None)
+        state = _SESSIONS.pop(session_id, None)
+    if state is not None:
+        _release(state)
 
 
 def _ensure_checker() -> None:

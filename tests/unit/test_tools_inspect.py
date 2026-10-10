@@ -1,5 +1,6 @@
 """data.inspect_dataset / data.inspect_file — passthrough, params, source pick, 403 guidance."""
 
+import os
 from pathlib import Path
 
 import httpx
@@ -124,6 +125,25 @@ async def test_inspect_file_absolute_path_uses_local_source():
         "path": "/Users/you/recordings/session-01.edf",
     }
     assert result.data == {**_DESCRIBE_PAYLOAD, "source": "local"}
+
+
+async def test_inspect_file_tilde_path_expands_on_the_wire():
+    """A '~/…' input is classified local via its expanded form — and the same
+    expanded path must be SENT: the backend's local resolver demands an
+    absolute path, so passing the raw tilde string would 400 a file the tool
+    itself accepted."""
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(req.url.params)
+        return httpx.Response(200, json={**_DESCRIBE_PAYLOAD, "source": "local"})
+
+    async with Client(make_server(handler)) as c:
+        await c.call_tool("data.inspect_file", {"path": "~/data/session-01.edf"})
+    assert seen["params"] == {
+        "source": "local",
+        "path": os.path.expanduser("~/data/session-01.edf"),
+    }
 
 
 async def test_inspect_file_relative_path_uses_upload_source():

@@ -76,10 +76,26 @@ def cmd_serve(args: argparse.Namespace) -> int:
     """Streamable-HTTP gateway (see nimbus_mcp.server.serve)."""
     from .server import serve as serve_server
 
+    # CLI flag > env > default, compared with `is not None` so explicit
+    # values (notably --port 0, an ephemeral port) are honored, not eaten by
+    # an `or` fallthrough.
+    host = args.host if args.host is not None else os.environ.get("NIMBUS_MCP_HOST")
+    path = args.path if args.path is not None else os.environ.get("NIMBUS_MCP_PATH")
+    port = args.port
+    if port is None:
+        raw_port = os.environ.get("NIMBUS_MCP_PORT")
+        if raw_port:
+            try:
+                port = int(raw_port)
+            except ValueError:
+                # Guarded like _poll_interval: a malformed env value is a
+                # config error, not a traceback.
+                print(f"nimbus-mcp serve: NIMBUS_MCP_PORT must be an integer, got {raw_port!r}.")
+                return 1
     serve_server(
-        host=args.host or os.environ.get("NIMBUS_MCP_HOST") or DEFAULT_SERVE_HOST,
-        port=args.port or int(os.environ.get("NIMBUS_MCP_PORT") or 8080),
-        path=args.path or os.environ.get("NIMBUS_MCP_PATH") or "/mcp",
+        host=host or DEFAULT_SERVE_HOST,
+        port=port if port is not None else 8080,
+        path=path or "/mcp",
     )
     return 0
 

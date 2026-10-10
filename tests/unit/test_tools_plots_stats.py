@@ -165,3 +165,19 @@ async def test_stats_grouped_requires_ids(tmp_path):
     async with Client(make_server(lambda req: httpx.Response(500), tmp_path, stats)) as c:
         with pytest.raises(ToolError, match="at least one id"):
             await c.call_tool("stats.grouped", {"execution_ids": []})
+
+
+async def test_stats_grouped_rejects_over_25_ids_without_calling(tmp_path):
+    """>25 ids must fail loudly, not silently trim: a pooled mean/t-test over
+    an arbitrary 25-subset reported as the full result is confidently wrong.
+    Validation precedes any HTTP call (the backend would only 422 the same
+    request — the agent must learn it over-submitted)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("validation must precede the HTTP request")
+
+    async with Client(make_server(handler, tmp_path, stats)) as c:
+        with pytest.raises(ToolError, match="at most 25"):
+            await c.call_tool(
+                "stats.grouped", {"execution_ids": [f"exec_{i}" for i in range(26)]}
+            )

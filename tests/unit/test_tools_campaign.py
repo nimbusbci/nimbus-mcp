@@ -457,3 +457,41 @@ def test_experiments_registry_keys_by_credential_fingerprint():
     assert reg.snapshot("fp_alice", "exp1")["experimentId"] == "exp1"
     assert reg.snapshot("fp_bob", "exp1") is None  # other tenant: miss
     assert reg.snapshot("fp_alice", "exp_other") is None
+
+
+def test_experiments_registry_evicts_oldest_terminal_over_cap():
+    """The registry is bounded: past MAX_EXPERIMENTS the oldest TERMINAL
+    experiments are evicted (long-lived hosted gateway, states holding full
+    train_graphs), while a still-running experiment is never evicted."""
+    reg = campaign.Experiments()
+
+    def mk(exp_id: str, status: str) -> campaign.ExperimentState:
+        state = campaign.ExperimentState(exp_id, [], max_in_flight=1)
+        state.status = status
+        return state
+
+    for i in range(campaign.MAX_EXPERIMENTS):
+        reg.add(mk(f"e{i}", "completed"), fingerprint="fp")
+    assert len(reg._states) == campaign.MAX_EXPERIMENTS
+
+    running = mk("run-1", "running")
+    reg.add(running, fingerprint="fp")
+    assert len(reg._states) == campaign.MAX_EXPERIMENTS  # cap enforced
+    assert "fp:e0" not in reg._states  # oldest terminal evicted
+    assert reg._states["fp:run-1"] is running  # running survives
+
+    reg.add(mk("e-new", "completed"), fingerprint="fp")
+    assert len(reg._states) == campaign.MAX_EXPERIMENTS
+    assert "fp:e1" not in reg._states  # next-oldest terminal evicted next
+    assert "fp:e2" in reg._states
+
+
+def test_experiments_registry_never_evicts_when_all_running():
+    """A registry full of still-running experiments grows past the cap
+    rather than dropping a pollable one — the workers finalize them to a
+    terminal state, and the next add() evicts then."""
+    reg = campaign.Experiments()
+    for i in range(campaign.MAX_EXPERIMENTS + 4):
+        reg.add(campaign.ExperimentState(f"r{i}", [], max_in_flight=1), fingerprint="fp")
+    assert len(reg._states) == campaign.MAX_EXPERIMENTS + 4
+    assert reg.snapshot("fp", "r0") is not None

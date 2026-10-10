@@ -181,6 +181,68 @@ async def test_stream_status_rejects_bad_session_id():
             await c.call_tool("stream.status", {"session_id": "../evil"})
 
 
+async def test_start_stream_disconnects_when_start_stream_fails():
+    """start-stream failing AFTER a successful connect must not leave the
+    device connected with no handle: the tool best-effort disconnects the
+    just-created session and says so in the error (with the sessionId for
+    reference)."""
+    calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req.url.path)
+        if req.url.path == "/api/hardware/connect":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "status": "success",
+                    "sessionId": "sess-1",
+                    "connected": True,
+                    "deviceType": "brainbit",
+                    "channels": 4,
+                },
+            )
+        if req.url.path == "/api/hardware/start-stream":
+            return httpx.Response(404, json={"detail": "device dropped between calls"})
+        if req.url.path == "/api/hardware/disconnect":
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(req.url.path)
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="sess-1 was disconnected"):
+            await c.call_tool("stream.start", {"device_type": "brainbit", "confirm": True})
+    assert calls == [
+        "/api/hardware/connect",
+        "/api/hardware/start-stream",
+        "/api/hardware/disconnect",
+    ]
+
+
+async def test_start_stream_failed_disconnect_failure_names_recovery_path():
+    """If even the cleanup disconnect fails, the error must carry the
+    sessionId and the stream.stop recovery hint instead of a silent orphaned
+    device."""
+    calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req.url.path)
+        if req.url.path == "/api/hardware/connect":
+            return httpx.Response(
+                200,
+                json={"ok": True, "status": "success", "sessionId": "sess-1", "connected": True},
+            )
+        if req.url.path == "/api/hardware/start-stream":
+            return httpx.Response(500, json={"detail": "stream start failed"})
+        if req.url.path == "/api/hardware/disconnect":
+            return httpx.Response(500, json={"detail": "disconnect failed too"})
+        raise AssertionError(req.url.path)
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="stream.stop"):
+            await c.call_tool("stream.start", {"device_type": "brainbit", "confirm": True})
+    assert calls.count("/api/hardware/disconnect") == 1
+
+
 def _streaming_backend(calls: list[str]) -> Callable[[httpx.Request], httpx.Response]:
     """Handler that accepts connect/start/stream-status/stop/disconnect."""
 
@@ -355,3 +417,62 @@ async def test_stream_stop_rejected_keeps_watchdog_armed(monkeypatch):
         assert result.data["stopped"] is True  # return contract unchanged
         with activity._LOCK:
             assert "sess-1" not in activity._SESSIONS  # accepted stop disarms
+
+
+# ── binding discard: replaced / explicitly stopped watches release their client ──
+
+
+def test_watchdog_replacement_discards_previous_binding():
+    """Re-registering the same session replaces the watch and releases the
+    replaced watch's binding (it never fired and never will); an explicit
+    unregister releases the current one. Idempotent."""
+    closed: list[str] = []
+
+    def stop() -> None:
+        return None
+
+    activity.register_started("s1", stop, 60, on_discard=lambda: closed.append("old"))
+    activity.register_started("s1", stop, 60, on_discard=lambda: closed.append("new"))
+    assert closed == ["old"]
+    activity.unregister("s1")
+    assert closed == ["old", "new"]
+    activity.unregister("s1")  # idempotent: no double discard
+    assert closed == ["old", "new"]
+
+
+def test_watchdog_discard_failure_never_propagates():
+    """A throwing discard (broken client) must not crash unregister."""
+    activity.register_started("s1", lambda: None, 60, on_discard=lambda: 1 / 0)
+    activity.unregister("s1")  # must not raise
+
+
+def test_local_bound_client_exposes_no_discard():
+    """Local mode: bound_client() is nullcontext over the SHARED client — no
+    discard attribute, so the watchdog lifecycle can never close it."""
+    client = NimbusClient(
+        McpConfig(api_url="http://t", mcp_key="k", export_dir=None),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+    )
+    assert getattr(client.bound_client(), "discard", None) is None
+
+
+async def test_stream_start_hands_discard_to_watchdog(monkeypatch):
+    """(hosted wiring) stream.start must pass the binding's discard into the
+    watchdog so an explicit stream.stop / replacement releases the fresh
+    per-token client; calling it standalone closes without error."""
+    calls: list[str] = []
+    captured: dict = {}
+    real_register = activity.register_started
+
+    def spy(session_id, stop_fn, timeout_sec, on_discard=None):
+        captured["on_discard"] = on_discard
+        return real_register(session_id, stop_fn, timeout_sec, on_discard=on_discard)
+
+    monkeypatch.setattr(activity, "register_started", spy)
+    async with Client(make_header_server(_streaming_backend(calls))) as c:
+        result = await c.call_tool(
+            "stream.start", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 60}
+        )
+    assert result.data["started"] is True
+    assert callable(captured["on_discard"])  # hosted binding owns its client
+    captured["on_discard"]()  # standalone release: closes without error
