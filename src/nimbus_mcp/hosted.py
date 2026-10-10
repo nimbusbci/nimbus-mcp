@@ -1,6 +1,6 @@
 """Hosted gateway: streamable-HTTP transport with per-request credentials.
 
-``nimbus-mcp serve`` runs the same 39 tools over streamable HTTP so remote
+``nimbus-mcp serve`` runs the same 43 tools over streamable HTTP so remote
 MCP clients (and registries such as Smithery) can connect by URL. The
 gateway process itself holds NO credential: each request's Nimbus API token
 arrives as an MCP client header (``X-Nimbus-Token: nimb_…`` or

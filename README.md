@@ -152,7 +152,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 39 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 43 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -207,7 +207,7 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (39)
+## Tools (43)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
@@ -222,6 +222,10 @@ Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
 Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
 `calibration.pause`, `calibration.resume`, `calibration.train`
 Projects: `project.create`, `project.list`, `project.save`, `project.load`
+Python: `python.validate` (static contract check for BYO model code — no execution)
+Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring,
+202 + `submissionId`), `leaderboard.status` (poll one submission, owner-only),
+`leaderboard.mine` (your submissions, newest first)
 BIDS: `bids.export_dataset` (pack / upload / recording → BIDS-layout zip;
 continuous → BIDS-raw, epoched → BIDS-derivatives), `bids.export_execution`
 (results bundle: metrics, participants.tsv, protocol, pipeline snapshot)

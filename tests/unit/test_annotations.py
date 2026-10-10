@@ -67,9 +67,19 @@ def test_annotation_policy_invariants():
     assert tools["calibration.status"].annotations.read_only_hint is True
     assert tools["calibration.status"].annotations.idempotent_hint is True
     # Reads are idempotent (safe for clients to retry).
-    for name in ("account.whoami", "catalog.nodes", "execution.results", "data.inspect_dataset"):
+    for name in (
+        "account.whoami",
+        "catalog.nodes",
+        "execution.results",
+        "data.inspect_dataset",
+        "leaderboard.status",
+        "leaderboard.mine",
+    ):
         assert tools[name].annotations.read_only_hint is True
         assert tools[name].annotations.idempotent_hint is True
+    # BYO leaderboard submission enqueues server-side scoring work.
+    assert tools["leaderboard.submit"].annotations.read_only_hint is False
+    assert tools["leaderboard.submit"].annotations.destructive_hint is False
     # Local-write tools (downloads/exports into NIMBUS_EXPORT_DIR) change no
     # backend state but DO write the local environment, so they must not claim
     # readOnlyHint (m8ven annotation audit 2026-10-08); retry-safe.
@@ -87,4 +97,4 @@ def test_annotation_policy_invariants():
 def test_tool_count_is_tracked():
     # A new tool must update this number AND pass the suites above — the count
     # is asserted so additions are conscious.
-    assert len(_all_tools()) == 40
+    assert len(_all_tools()) == 43

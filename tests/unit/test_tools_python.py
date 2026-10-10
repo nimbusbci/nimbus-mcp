@@ -39,7 +39,9 @@ async def test_validate_posts_code_and_class_name():
                 "ok": True,
                 "className": "MyModel",
                 "error": None,
-                "warnings": ["No predict_proba() — confidence and uncertainty panels will be unavailable."],
+                "warnings": [
+                    "No predict_proba() — confidence and uncertainty panels will be unavailable."
+                ],
                 "codeHash": "abc123",
             },
         )
@@ -64,7 +66,10 @@ async def test_validate_omits_class_name_when_absent():
         import json
 
         seen["body"] = json.loads(req.read())
-        return httpx.Response(200, json={"ok": False, "className": None, "error": "Syntax error (line 1)", "warnings": []})
+        return httpx.Response(
+            200,
+            json={"ok": False, "className": None, "error": "Syntax error (line 1)", "warnings": []},
+        )
 
     async with Client(make_server(handler)) as c:
         result = await c.call_tool("python.validate", {"code": "class Broken("})

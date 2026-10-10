@@ -1,4 +1,4 @@
-"""FastMCP server assembly: one client, fourteen tool modules, stdio transport."""
+"""FastMCP server assembly: one client, fifteen tool modules, stdio transport."""
 
 from __future__ import annotations
 
@@ -58,7 +58,9 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
    into the subject's own classifier.
 7) BYO model code: python.validate(script) statically checks a python_model class
    (fit/predict contract, no execution), then run it via execution.run with the code
-   inline in the node config — desktop app only (isolated local worker).
+   inline in the node config (runtime auto|local|cloud — desktop app: isolated local
+   worker; hosted web app: ephemeral cloud sandbox with optional per-run pip
+   requirements); leaderboard.submit scores a model class server-side (LOSO).
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 

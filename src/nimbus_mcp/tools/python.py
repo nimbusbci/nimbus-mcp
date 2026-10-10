@@ -14,8 +14,9 @@ _MAX_CODE_CHARS = 256 * 1024
 _USAGE = (
     "Fix the reported issues, then embed the code in a python_model node config "
     '(config: {"code": "<script>", "inputKind": "epochs"|"features", "className": ...}) '
-    "and run it with execution.run. python_model executes on the Nimbus desktop "
-    "app only (isolated local worker)."
+    "and run it with execution.run. python_model runtime is auto|local|cloud: the "
+    "desktop app runs the isolated local worker; the hosted web app runs it in an "
+    "ephemeral cloud sandbox (Modal) with optional per-run pip requirements."
 )
 
 
