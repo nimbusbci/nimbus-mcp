@@ -1,4 +1,4 @@
-"""FastMCP server assembly: one client, fifteen tool modules, stdio transport."""
+"""FastMCP server assembly: one client, seventeen tool modules, stdio transport."""
 
 from __future__ import annotations
 
@@ -22,9 +22,11 @@ from .tools import (
     inspect,
     leaderboard,
     live,
+    plots,
     projects,
     python,
     run,
+    stats,
     telemetry,
     whoami,
 )
@@ -50,9 +52,16 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
    pipeline.export for a standalone zip.
 4b) Share/audit: bids.export_dataset / bids.export_execution produce BIDS-layout
    zips with sha256 manifests.
+4c) SEE the results: plots.confusion / plots.dataset / plots.erp / plots.leaderboard
+   render PNG figures you can look at (not just JSON numbers); stats.grouped pools
+   per-subject accuracies across runs into cluster-aware stats (t-interval +
+   t-test vs chance) - the review-grade companion to execution.results.
 5) Live (use with care): device.list, device.test, then stream.start(confirm=true) only with
    the user's explicit go-ahead — it connects an EEG device to a human session. An idle
    watchdog stops abandoned sessions; polling stream.status keeps them alive.
+   stream.telemetry works with OR without a deployed model: modelless streams
+   report signal quality + focus/relaxation band-power indicators
+   (latestPrediction null).
 6) Personal calibration: calibration.start(confirm=true) while the subject wears the device —
    the Studio app shows cues; calibration.status polls; calibration.train turns the recording
    into the subject's own classifier.
@@ -113,11 +122,13 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
         artifacts,
         bids,
         live,
+        plots,
         telemetry,
         data,
         inspect,
         projects,
         python,
+        stats,
     ):
         module.register(mcp, client)
     return mcp

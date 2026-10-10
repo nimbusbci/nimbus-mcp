@@ -88,6 +88,10 @@ def test_annotation_policy_invariants():
         "pipeline.export",
         "bids.export_dataset",
         "bids.export_execution",
+        "plots.confusion",
+        "plots.dataset",
+        "plots.erp",
+        "plots.leaderboard",
     ):
         assert tools[name].annotations.read_only_hint is False
         assert tools[name].annotations.destructive_hint is False
@@ -97,4 +101,4 @@ def test_annotation_policy_invariants():
 def test_tool_count_is_tracked():
     # A new tool must update this number AND pass the suites above — the count
     # is asserted so additions are conscious.
-    assert len(_all_tools()) == 43
+    assert len(_all_tools()) == 48

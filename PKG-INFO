@@ -1,6 +1,6 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.11.0
+Version: 0.12.0
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
@@ -414,6 +414,33 @@ into studio projects, run multi-configuration experiment campaigns, watch live E
 sessions, and (explicitly confirmed) start live streaming — through your **local**
 Nimbus backend **or the hosted deployment, with one `nimbus-mcp login`**.
 
+## Why nimbus-mcp (October 2026 field)
+
+The BCI-MCP niche grew four other servers in 2026. They are honest,
+focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
+
+| Capability | nimbus-mcp | bci-mcp | eeg-mcp | mne-mcp | ephys-mcp |
+|---|---|---|---|---|---|
+| Build + validate + run BCI pipelines | ✅ 48 tools | — | — | — | — |
+| Train on real data (MOABB packs, uploads) | ✅ | — | — | file I/O only | NWB/DANDI |
+| Bring-your-own model code (`python_model`) | ✅ local + cloud sandbox | — | — | — | — |
+| Benchmark leaderboard + server-side LOSO scoring | ✅ | — | — | — | — |
+| Agent-visible figures (PNG content blocks) | ✅ `plots.*` | — | — | ✅ | ✅ |
+| Live hardware sessions on a human | ✅ confirm-gated | ✅ | ✅ | — | — |
+| Modelless live band powers (focus/relaxation) | ✅ `stream.telemetry` | ✅ | ✅ | — | — |
+| Guided subject calibration | ✅ `calibration.*` | — | — | — | — |
+| BIDS export (sha256 manifests) | ✅ `bids.*` | — | — | — | — |
+| Cluster-aware group statistics | ✅ `stats.grouped` | — | — | — | partial |
+| Transport | stdio + hosted HTTP gateway | stdio + HTTP | stdio | stdio | stdio |
+| Validation evidence | peer-submitted preprint (3 datasets / 6 pipelines) | band-ratio heuristics | — | — | — |
+
+Scope honesty (deliberate non-goals): **no stimulation output** (eeg-mcp's
+triple-interlocked `send_stim_event` is genuinely novel; we don't drive
+stimulators), **no spike/ephys data** (ephys-mcp covers intracortical
+recording — different data plane), **no source localization / full MNE
+parity** (mne-mcp is a deep offline MNE wrapper; `plots.*` covers the
+figures agents need on Nimbus data).
+
 ## Install
 
 ```bash
@@ -421,6 +448,10 @@ pip install nimbus-mcp   # or: uvx nimbus-mcp
 ```
 
 (Also installable from the repo: `pip install -e nimbus-studio/mcp`.)
+
+**Zero-hardware demo**: [examples/demo.md](examples/demo.md) — a copy-paste
+agent prompt that runs the whole loop (explore → inspect → figures → train →
+confusion figure → leaderboard → stats) on public MOABB data, no device.
 
 ## Authentication
 
@@ -506,6 +537,22 @@ the terminal equivalent with a live backend probe.
 - Desktop app users: open **Settings → MCP & Agents** — no manual key setup (the app
   creates the key, injects it into its backend, and hands you copy-ready configs).
 
+**No desktop app required.** Acquisition is fully in-backend: a headless local
+backend + `nimbus-mcp` can drive real hardware (BrainFlow boards, BrainBit over
+BLE, LSL, PiEEG) and synthetic boards, with zero Electron:
+
+```bash
+git clone <this repo> && cd NimbusStudio/nimbus-studio/backend-py
+pip install -e ".[streaming]"            # brainflow + pyneurosdk2 + pylsl extras
+export DESKTOP_LOCAL_BACKEND=true MCP_LOCAL_KEY=<secret> MCP_LOCAL_USER_ID=user_…
+python -m nimbus_backend.server.app      # loopback backend with device radios
+# another shell: nimbus-mcp against http://127.0.0.1:8080 with NIMBUS_MCP_KEY=<secret>
+```
+
+The same `stream.start → stream.telemetry` flow then works with OR without a
+trained model (modelless streams report live signal quality + focus/relaxation
+indicators).
+
 ## Configure the backend
 
 Desktop/dev env (e.g. `backend-py/data/.env` or the dev shell):
@@ -554,7 +601,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 43 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 48 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -609,7 +656,7 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (43)
+## Tools (48)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
@@ -631,13 +678,18 @@ Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring
 BIDS: `bids.export_dataset` (pack / upload / recording → BIDS-layout zip;
 continuous → BIDS-raw, epoched → BIDS-derivatives), `bids.export_execution`
 (results bundle: metrics, participants.tsv, protocol, pipeline snapshot)
+Plots: `plots.confusion`, `plots.dataset` (psd / topomap / bandpower /
+spectrogram), `plots.erp` (per-class butterfly), `plots.leaderboard` (CI
+whisker bars, BYO highlighted) — PNG figures the assistant can SEE
+Stats: `stats.grouped` (cluster-aware per-subject accuracies across runs:
+t-interval + t-test vs chance)
 
 Not sure which pipeline to build? `catalog.leaderboard()` ranks benchmarked pipelines
 per dataset (`meanAccuracyPct` desc, 95% CI) under the canonical `within_session`
 protocol — agents pick templates by ranking there and pull the winner with
 `catalog.template(pipelineId)`.
 
-## Look at your data first
+## Look at your data first (and at your results)
 
 Before building any pipeline, agents can *see* the data: channels, sampling
 rate, trial/class balance, per-channel µV stats, canonical band powers, and a
@@ -680,6 +732,20 @@ worth fixing before training. And a units caveat: the loader **assumes
 volts** — a µV-native CSV reads 1e6x too large; set `unitsScale` (e.g.
 `1e-6` with `units: "uV"`) in the pipeline's `custom_data` config when
 needed.
+
+The same data — and your results — can be rendered as **PNG figures the
+assistant can look at**, not just JSON: `plots.dataset` (PSD / band-power
+heatmap / scalp topomap / spectrogram), `plots.erp` (per-class evoked
+butterfly — check class structure before training anything),
+`plots.confusion` (after a run: which classes are actually confused),
+`plots.leaderboard` (CI whisker bars per dataset, BYO submissions
+highlighted). `save=true` also writes the PNG into `NIMBUS_EXPORT_DIR/plots/`.
+
+```python
+plots.confusion(execution_id="exec_123")               # → image + per-class accuracy
+plots.dataset(kind="psd", source="dataset", dataset="BNCI2014_001", subject="S01")
+stats.grouped(execution_ids=["exec_123", "exec_124"])  # cluster-aware t-interval + p
+```
 
 ## Uploading data
 
