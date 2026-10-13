@@ -67,9 +67,7 @@ async def test_confusion_saves_png(tmp_path):
         return httpx.Response(200, json=_plot_payload())
 
     async with Client(make_server(handler, tmp_path)) as c:
-        result = await c.call_tool(
-            "plots.confusion", {"execution_id": "exec_9", "save": True}
-        )
+        result = await c.call_tool("plots.confusion", {"execution_id": "exec_9", "save": True})
     _, info = _image_and_info(result)
     saved = tmp_path / "plots" / "exec_9-eval-confusion.png"
     assert saved.exists()
@@ -79,9 +77,7 @@ async def test_confusion_saves_png(tmp_path):
 async def test_confusion_rejects_bad_matrix(tmp_path):
     async with Client(make_server(lambda req: httpx.Response(500), tmp_path)) as c:
         with pytest.raises(ToolError, match="eval.*train"):
-            await c.call_tool(
-                "plots.confusion", {"execution_id": "exec_9", "matrix": "bogus"}
-            )
+            await c.call_tool("plots.confusion", {"execution_id": "exec_9", "matrix": "bogus"})
 
 
 async def test_dataset_forwards_source_params(tmp_path):
@@ -142,6 +138,43 @@ async def test_leaderboard_track_and_erp_passthrough(tmp_path):
     assert seen[1][1]["maxChannels"] == 16
 
 
+async def test_leaderboard_accepts_pretrained_track(tmp_path):
+    """The efficiency track forwards verbatim; the backend renders the
+    classical LOSO baseline side panel for it."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert json.loads(req.content) == {
+            "datasetId": "BNCI2014_001",
+            "track": "pretrained_few_trial",
+        }
+        return httpx.Response(200, json=_plot_payload({"baseline": {"nRows": 2}}))
+
+    async with Client(make_server(handler, tmp_path)) as c:
+        result = await c.call_tool(
+            "plots.leaderboard",
+            {"dataset_id": "BNCI2014_001", "track": "pretrained_few_trial"},
+        )
+    _, info = _image_and_info(result)
+    assert info["meta"]["baseline"]["nRows"] == 2
+
+
+async def test_leaderboard_rejects_unknown_track(tmp_path):
+    async with Client(make_server(lambda req: httpx.Response(500), tmp_path)) as c:
+        with pytest.raises(ToolError, match="pretrained_few_trial"):
+            await c.call_tool("plots.leaderboard", {"dataset_id": "X", "track": "within-subject"})
+
+
+async def test_leaderboard_enum_and_doc_cover_pretrained_overlay(tmp_path):
+    """The enum carries the new track and the tool docstring documents the
+    baseline overlay (agents pick tracks from the description)."""
+    assert "pretrained_few_trial" in plots._TRACKS
+    server = make_server(lambda req: httpx.Response(500), tmp_path)
+    tool = await server.get_tool("plots.leaderboard")
+    assert tool is not None
+    assert "pretrained_few_trial" in tool.description
+    assert "baseline" in tool.description
+
+
 async def test_stats_grouped_forwards_ids_and_chance(tmp_path):
     def handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path == "/api/stats/grouped"
@@ -155,9 +188,7 @@ async def test_stats_grouped_forwards_ids_and_chance(tmp_path):
         )
 
     async with Client(make_server(handler, tmp_path, module=stats)) as c:
-        result = await c.call_tool(
-            "stats.grouped", {"execution_ids": ["a", "b"], "chance": 0.25}
-        )
+        result = await c.call_tool("stats.grouped", {"execution_ids": ["a", "b"], "chance": 0.25})
     assert result.data["overall"]["nGroups"] == 6
 
 
@@ -178,6 +209,4 @@ async def test_stats_grouped_rejects_over_25_ids_without_calling(tmp_path):
 
     async with Client(make_server(handler, tmp_path, stats)) as c:
         with pytest.raises(ToolError, match="at most 25"):
-            await c.call_tool(
-                "stats.grouped", {"execution_ids": [f"exec_{i}" for i in range(26)]}
-            )
+            await c.call_tool("stats.grouped", {"execution_ids": [f"exec_{i}" for i in range(26)]})

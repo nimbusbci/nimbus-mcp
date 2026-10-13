@@ -32,15 +32,16 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         code: str,
         class_name: str | None = None,
         requirements: list[str] | None = None,
+        track: str = "cross_subject",
     ) -> dict[str, Any]:
-        """Submit a BYO python_model to the cross-subject (LOSO) leaderboard.
+        """Submit a BYO python_model to a leaderboard track for server-side scoring.
 
-        Nimbus scores it server-side under the fixed protocol (seed 42,
-        leave-one-subject-out over the dataset's subjects) — you submit code,
-        never results. Poll ``leaderboard.status`` with the returned
-        ``submissionId``; scoring takes minutes (classical) to tens of minutes
-        (deep). Requirements must be plain PyPI names/specs (max 20, no URLs).
-        Identical code resubmission is idempotent (``deduplicated: true``).
+        Nimbus scores it server-side under the track's fixed protocol — you
+        submit code, never results. Poll ``leaderboard.status`` with the
+        returned ``submissionId``; scoring takes minutes (classical) to tens
+        of minutes (deep). Requirements must be plain PyPI names/specs (max
+        20, no URLs). Identical code resubmission is idempotent per track
+        (``deduplicated: true``).
 
         Args:
             dataset_id: Open dataset id (see catalog.leaderboard crossSubject
@@ -50,8 +51,19 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 predict(X) (<=256KB; validate first with python.validate).
             class_name: Contract class to instantiate; omit to auto-detect.
             requirements: Optional PyPI requirements (e.g. ["sklearn>=1.4"]).
+            track: "cross_subject" (default — full-data leave-one-subject-out,
+                seed 42) or "pretrained_few_trial" (efficiency track: LOSO with
+                a protocol-fixed 100-trials-per-subject cap; code that imports
+                torch must declare its trained parameter count as a class
+                attribute — PARAMS_TRAINED = <int> — which becomes the row's
+                paramsTrained and is cross-checked when computable).
         """
-        body: dict[str, Any] = {"datasetId": dataset_id, "name": name, "code": code}
+        body: dict[str, Any] = {
+            "datasetId": dataset_id,
+            "name": name,
+            "code": code,
+            "track": track,
+        }
         if class_name:
             body["className"] = class_name
         if requirements:

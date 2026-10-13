@@ -148,6 +148,35 @@ async def test_submit_maps_optional_args_to_camel_case():
     assert seen["body"]["requirements"] == ["sklearn>=1.4"]
 
 
+async def test_submit_forwards_track_and_defaults_to_cross_subject():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.append(json.loads(req.read()))
+        return httpx.Response(
+            202,
+            json={"ok": True, "submissionId": "sub-t", "status": "queued", "deduplicated": False},
+        )
+
+    async with Client(make_server(handler)) as c:
+        await c.call_tool("leaderboard.submit", {"dataset_id": "D", "name": "n", "code": "c"})
+        await c.call_tool(
+            "leaderboard.submit",
+            {
+                "dataset_id": "D",
+                "name": "n",
+                "code": "c",
+                "track": "pretrained_few_trial",
+            },
+        )
+    # Default preserves today's cross-subject LOSO call; the track rides the
+    # body verbatim for the efficiency track.
+    assert seen[0]["track"] == "cross_subject"
+    assert seen[1]["track"] == "pretrained_few_trial"
+
+
 async def test_status_gets_one_submission():
     seen = {}
 

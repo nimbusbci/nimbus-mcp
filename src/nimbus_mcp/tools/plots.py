@@ -25,7 +25,7 @@ from ._guards import safe_segment
 
 _PLOT_KINDS = ("psd", "topomap", "bandpower", "spectrogram")
 _BANDS = ("delta", "theta", "alpha", "beta", "gamma")
-_TRACKS = ("within_session", "crossSubject")
+_TRACKS = ("within_session", "crossSubject", "pretrained_few_trial")
 
 
 def _decode_png(payload: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
@@ -57,9 +57,7 @@ def _safe_stem(*parts: str) -> str:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    def _figure_response(
-        payload: dict[str, Any], stem: str, save: bool
-    ) -> list[Any]:
+    def _figure_response(payload: dict[str, Any], stem: str, save: bool) -> list[Any]:
         png, meta = _decode_png(payload)
         info: dict[str, Any] = {
             "ok": True,
@@ -192,18 +190,21 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
     ) -> list[Any]:
         """Leaderboard bar chart for one dataset: accuracy with 95% CI
         whiskers, best first; BYO python_model submissions highlighted in a
-        distinct color. The visual companion to catalog.leaderboard.
+        distinct color. The visual companion to catalog.leaderboard. On the
+        pretrained_few_trial track the figure also includes the classical
+        LOSO baseline as a muted side panel for comparison.
 
         Args:
             dataset_id: Dataset to chart, e.g. "BNCI2014_001" (see catalog.leaderboard).
-            track: "within_session" (curated 5-fold) or "crossSubject" (LOSO,
-                curated + BYO submissions).
+            track: "within_session" (curated 5-fold), "crossSubject" (LOSO,
+                curated + BYO submissions), or "pretrained_few_trial" (the
+                efficiency track: LOSO at the protocol's fixed per-subject
+                trial budget — the figure also includes the classical LOSO
+                baseline as a muted side panel for comparison).
             save: Also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return its path.
         """
         ds_id = safe_segment(dataset_id, label="dataset id")
         if track not in _TRACKS:
             raise McpToolError(f"track must be one of {_TRACKS}; got {track!r}.")
-        payload = client.post(
-            "/api/plots/leaderboard", json={"datasetId": ds_id, "track": track}
-        )
+        payload = client.post("/api/plots/leaderboard", json={"datasetId": ds_id, "track": track})
         return _figure_response(payload, f"leaderboard-{ds_id}-{track}", save)

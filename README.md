@@ -271,14 +271,17 @@ Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
 Projects: `project.create`, `project.list`, `project.save`, `project.load`
 Python: `python.validate` (static contract check for BYO model code — no execution)
 Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring,
-202 + `submissionId`), `leaderboard.status` (poll one submission, owner-only),
+202 + `submissionId`; `track="pretrained_few_trial"` = efficiency track:
+100-trial-capped LOSO, torch code must declare `PARAMS_TRAINED`),
+`leaderboard.status` (poll one submission, owner-only),
 `leaderboard.mine` (your submissions, newest first)
 BIDS: `bids.export_dataset` (pack / upload / recording → BIDS-layout zip;
 continuous → BIDS-raw, epoched → BIDS-derivatives), `bids.export_execution`
 (results bundle: metrics, participants.tsv, protocol, pipeline snapshot)
 Plots: `plots.confusion`, `plots.dataset` (psd / topomap / bandpower /
 spectrogram), `plots.erp` (per-class butterfly), `plots.leaderboard` (CI
-whisker bars, BYO highlighted) — PNG figures the assistant can SEE
+whisker bars, BYO highlighted; `track=pretrained_few_trial` overlays the
+classical LOSO baseline side-by-side) — PNG figures the assistant can SEE
 Stats: `stats.grouped` (cluster-aware per-subject accuracies across runs:
 t-interval + t-test vs chance)
 
