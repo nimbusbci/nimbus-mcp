@@ -21,7 +21,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         ``kind: "byo"`` and an ``owner`` name). Within each dataset, ``rows``
         sort desc by ``meanAccuracyPct`` (95% CI in ``ciLoPct``/``ciHiPct``).
         ``packFingerprint`` identifies the exact dataset pack behind the
-        scores; ``updated`` marks each dataset's most recent run.
+        scores; ``updated`` marks each dataset's most recent run. The
+        ``pretrained_few_trial`` efficiency track means: accuracy at a
+        protocol-fixed 100-trials-per-subject budget — the frozen-backbone /
+        few-parameter rows that matter when calibration data is scarce
+        (``paramsTrained`` shown per row so cost is readable next to
+        accuracy).
         """
         return client.get("/api/leaderboard")
 

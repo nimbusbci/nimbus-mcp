@@ -30,7 +30,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 | BIDS export (sha256 manifests) | ✅ `bids.*` | — | — | — | — |
 | Cluster-aware group statistics | ✅ `stats.grouped` | — | — | — | partial |
 | Transport | stdio + hosted HTTP gateway | stdio + HTTP | stdio | stdio | stdio |
-| Validation evidence | peer-submitted preprint (3 datasets / 6 pipelines) | band-ratio heuristics | — | — | — |
+| Validation evidence | [arXiv:2610.13894](https://arxiv.org/abs/2610.13894) — parity study, 3 datasets / 6 pipelines / 2 protocols | band-ratio heuristics | — | — | — |
 
 Scope honesty (deliberate non-goals): **no stimulation output** (eeg-mcp's
 triple-interlocked `send_stim_event` is genuinely novel; we don't drive

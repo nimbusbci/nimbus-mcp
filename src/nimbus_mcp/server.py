@@ -70,6 +70,10 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
    inline in the node config (runtime auto|local|cloud — desktop app: isolated local
    worker; hosted web app: ephemeral cloud sandbox with optional per-run pip
    requirements); leaderboard.submit scores a model class server-side (LOSO).
+8) Foundation-model lane: foundation_features(backbone=reve|labram|eegpt|cbramod|
+   biot|steegformer|codebrain|stub) — 7 pretrained EEG backbones; frozen embeddings
+   feed any head. See catalog.leaderboard(track=pretrained_few_trial) for which
+   currently wins at the 100-trial budget.
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 

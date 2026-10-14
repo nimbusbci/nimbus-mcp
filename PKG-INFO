@@ -1,6 +1,6 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.13.0
+Version: 0.13.1
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
@@ -432,7 +432,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 | BIDS export (sha256 manifests) | ✅ `bids.*` | — | — | — | — |
 | Cluster-aware group statistics | ✅ `stats.grouped` | — | — | — | partial |
 | Transport | stdio + hosted HTTP gateway | stdio + HTTP | stdio | stdio | stdio |
-| Validation evidence | peer-submitted preprint (3 datasets / 6 pipelines) | band-ratio heuristics | — | — | — |
+| Validation evidence | [arXiv:2610.13894](https://arxiv.org/abs/2610.13894) — parity study, 3 datasets / 6 pipelines / 2 protocols | band-ratio heuristics | — | — | — |
 
 Scope honesty (deliberate non-goals): **no stimulation output** (eeg-mcp's
 triple-interlocked `send_stim_event` is genuinely novel; we don't drive
