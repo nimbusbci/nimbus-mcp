@@ -1,4 +1,4 @@
-"""FastMCP server assembly: one client, seventeen tool modules, stdio transport."""
+"""FastMCP server assembly: one client, eighteen tool modules, stdio transport."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from .tools import (
     campaign,
     data,
     discovery,
+    foundation,
     inspect,
     leaderboard,
     live,
@@ -72,8 +73,11 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
    requirements); leaderboard.submit scores a model class server-side (LOSO).
 8) Foundation-model lane: foundation_features(backbone=reve|labram|eegpt|cbramod|
    biot|steegformer|codebrain|stub) — 7 pretrained EEG backbones; frozen embeddings
-   feed any head. See catalog.leaderboard(track=pretrained_few_trial) for which
-   currently wins at the 100-trial budget.
+   feed any head. foundation.compare(source/dataset/subject) runs EVERY backbone on
+   YOUR data once (frozen embed + LDA 5-fold CV) and returns a ranked chart with
+   CIs, params, and wall time — pick the backbone by measurement, not vibes. See
+   catalog.leaderboard(track=pretrained_few_trial) for which currently wins at the
+   100-trial budget.
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 
@@ -133,6 +137,7 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
         projects,
         python,
         stats,
+        foundation,
     ):
         module.register(mcp, client)
     return mcp
