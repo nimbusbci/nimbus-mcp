@@ -47,6 +47,16 @@ def test_every_parameter_is_documented():
             assert desc, f"{tool.name}.{pname}: no parameter description"
 
 
+def test_every_tool_has_output_schema():
+    # Smithery scores declared output schemas (53/58 → 10.37pt lost). The MCP
+    # spec only allows OBJECT schemas; figure tools declare the JSON sidecar
+    # via ToolResult(structured_content=...) + output_schema= and keep the PNG
+    # as an image content block.
+    for tool in _all_tools():
+        assert tool.output_schema is not None, f"{tool.name}: missing outputSchema"
+        assert tool.output_schema.get("type") == "object", f"{tool.name}: non-object outputSchema"
+
+
 def test_annotation_policy_invariants():
     tools = {t.name: t for t in _all_tools()}
     destructive = {n for n, t in tools.items() if t.annotations.destructive_hint}

@@ -12,23 +12,24 @@ import base64
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
 
 from ..client import McpToolError, NimbusClient
-from ._annotations import READ_ONLY
+from ._annotations import FIGURE_OUTPUT_SCHEMA, READ_ONLY
 
 _SOURCES = ("dataset", "upload", "local")
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="foundation.compare", annotations=READ_ONLY)
+    @mcp.tool(name="foundation.compare", annotations=READ_ONLY, output_schema=FIGURE_OUTPUT_SCHEMA)
     def compare(
         source: str,
         dataset: str | None = None,
         subject: str | None = None,
         mode: str = "all",
         path: str | None = None,
-    ) -> list[Any]:
+    ) -> ToolResult:
         """Run every available pretrained backbone on YOUR data and see which wins —
         a ranked bar chart with CI whiskers, params, and wall time per backbone.
         Backbones that can't process your data (window size, channel count) are
@@ -71,4 +72,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "mimeType": payload.get("mimeType", "image/png"),
             "meta": dict(payload.get("meta") or {}),
         }
-        return [Image(data=png, format="png"), info]
+        # Image as content block; sidecar as structuredContent typed by
+        # FIGURE_OUTPUT_SCHEMA.
+        return ToolResult(content=[Image(data=png, format="png")], structured_content=info)

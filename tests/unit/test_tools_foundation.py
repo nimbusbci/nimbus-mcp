@@ -40,8 +40,11 @@ def make_server(handler, tmp_path) -> FastMCP:
 
 def _image_and_info(result: Any) -> tuple[ImageContent, dict[str, Any]]:
     images = [b for b in result.content if isinstance(b, ImageContent)]
-    texts = [b for b in result.content if isinstance(b, TextContent)]
     assert images, "no ImageContent block in tool result"
+    structured = getattr(result, "structured_content", None)
+    if structured is not None:
+        return images[0], structured
+    texts = [b for b in result.content if isinstance(b, TextContent)]
     assert texts, "no JSON sidecar in tool result"
     return images[0], json.loads(texts[0].text)
 

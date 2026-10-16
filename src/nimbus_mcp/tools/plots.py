@@ -17,10 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
 
 from ..client import McpToolError, NimbusClient
-from ._annotations import LOCAL_WRITE
+from ._annotations import FIGURE_OUTPUT_SCHEMA, LOCAL_WRITE
 from ._guards import safe_segment
 
 _PLOT_KINDS = ("psd", "topomap", "bandpower", "spectrogram")
@@ -57,7 +58,7 @@ def _safe_stem(*parts: str) -> str:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    def _figure_response(payload: dict[str, Any], stem: str, save: bool) -> list[Any]:
+    def _figure_response(payload: dict[str, Any], stem: str, save: bool) -> ToolResult:
         png, meta = _decode_png(payload)
         info: dict[str, Any] = {
             "ok": True,
@@ -67,14 +68,16 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         }
         if save:
             info.update(_save_png(png, stem, client.config.export_dir))
-        return [Image(data=png, format="png"), info]
+        # Image as content block (the assistant LOOKS at it); sidecar as
+        # structuredContent typed by FIGURE_OUTPUT_SCHEMA.
+        return ToolResult(content=[Image(data=png, format="png")], structured_content=info)
 
-    @mcp.tool(name="plots.confusion", annotations=LOCAL_WRITE)
+    @mcp.tool(name="plots.confusion", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
     def confusion(
         execution_id: str,
         matrix: str = "eval",
         save: bool = False,
-    ) -> list[Any]:
+    ) -> ToolResult:
         """Confusion-matrix figure for one execution: heatmap with trial
         counts + per-class accuracy bars, rendered as a PNG the assistant can
         see. Use it right after execution.results to eyeball WHICH classes are
@@ -93,7 +96,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         )
         return _figure_response(payload, f"{exec_id}-{matrix}-confusion", save)
 
-    @mcp.tool(name="plots.dataset", annotations=LOCAL_WRITE)
+    @mcp.tool(name="plots.dataset", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
     def dataset(
         kind: str,
         source: str,
@@ -104,7 +107,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         band: str = "alpha",
         channel_idx: int = 0,
         save: bool = False,
-    ) -> list[Any]:
+    ) -> ToolResult:
         """Figure over an EEG data source — the visual companion to
         data.inspect_dataset. kind=psd (Welch, channel mean bold),
         kind=bandpower (channel × band dB heatmap), kind=topomap (band-power
@@ -143,7 +146,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         )
         return _figure_response(payload, stem, save)
 
-    @mcp.tool(name="plots.erp", annotations=LOCAL_WRITE)
+    @mcp.tool(name="plots.erp", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
     def erp(
         source: str,
         dataset: str | None = None,
@@ -152,7 +155,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         path: str | None = None,
         max_channels: int = 16,
         save: bool = False,
-    ) -> list[Any]:
+    ) -> ToolResult:
         """ERP butterfly figure from epoched data: one subplot per class, all
         channel means (thin) + across-channel mean (bold), time-locked to the
         trial event. Shows whether class-conditioned evoked structure exists
@@ -182,12 +185,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         )
         return _figure_response(payload, stem, save)
 
-    @mcp.tool(name="plots.leaderboard", annotations=LOCAL_WRITE)
+    @mcp.tool(name="plots.leaderboard", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
     def leaderboard(
         dataset_id: str,
         track: str = "within_session",
         save: bool = False,
-    ) -> list[Any]:
+    ) -> ToolResult:
         """Leaderboard bar chart for one dataset: accuracy with 95% CI
         whiskers, best first; BYO python_model submissions highlighted in a
         distinct color. The visual companion to catalog.leaderboard. On the
