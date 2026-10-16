@@ -4,12 +4,18 @@ name: Sync from PyPI release
 # PyPI for new nimbus-mcp versions and mirrors them here, then tags — the tag
 # triggers publish-mcp.yml (official MCP Registry). The sdist carries
 # src/tests/pyproject/README/LICENSE/server.json/smithery.yaml/glama.json,
-# so no cross-repo tokens are needed.
+# so no cross-repo tokens are needed. Smithery has no auto-sync from PyPI,
+# so its release publish rides this same job (see final step).
 
 on:
   schedule:
     - cron: "17 6 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_smithery:
+        description: "Re-publish to Smithery even without a new PyPI version"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -93,3 +99,18 @@ jobs:
       - name: Publish server to MCP Registry
         if: steps.check.outputs.up_to_date == 'false'
         run: ./mcp-publisher publish
+
+      # Smithery does NOT auto-sync from PyPI: its listing (tool list +
+      # quality-panel scan) only moves when a release is published with the
+      # namespace API key. Ride the same version-change gate so every PyPI
+      # release refreshes Smithery too; dispatch with force_smithery to
+      # refresh without a release. If this step fails, the registry publish
+      # above has already landed — re-run or dispatch force_smithery once
+      # Smithery is reachable again.
+      - name: Publish release to Smithery
+        if: steps.check.outputs.up_to_date == 'false' || inputs.force_smithery == true
+        env:
+          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
+        run: |
+          test -n "$SMITHERY_API_KEY" || { echo "::error::SMITHERY_API_KEY secret not set"; exit 1; }
+          npx -y @smithery/cli mcp publish "https://nimbus-mcp.fly.dev/mcp" -n @nimbusbci/nimbus-mcp
