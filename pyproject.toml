@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nimbus-mcp"
-version = "0.13.2"
+version = "0.14.0"
 description = "MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)"
 readme = "README.md"
 license = { file = "LICENSE.txt" }
@@ -34,6 +34,11 @@ test = [
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
     "pyyaml>=6",  # tests/integration/test_template_drift.py reads backend YAMLs
+]
+# Hosted-gateway error reporting (`nimbus-mcp serve` + SENTRY_DSN). Optional
+# on purpose: stdio/PyPI installs never initialize telemetry and stay slim.
+sentry = [
+    "sentry-sdk>=2.19",
 ]
 
 [tool.hatch.build.targets.wheel]

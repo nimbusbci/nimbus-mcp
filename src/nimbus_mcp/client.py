@@ -136,8 +136,16 @@ class NimbusClient:
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return self._request("GET", path, params=params)
 
-    def post(self, path: str, json: dict[str, Any] | None = None) -> Any:
-        return self._request("POST", path, json=json)
+    def post(
+        self, path: str, json: dict[str, Any] | None = None, *, allow_422: bool = False
+    ) -> Any:
+        """POST; with ``allow_422`` a 422 body is RETURNED instead of raised.
+
+        Opt-in for endpoints whose 422 is a verdict payload the caller branches
+        on (protocol validate: ``{"valid": false, "errors": [...]}``), not an
+        error — the generic ProblemDetail 422s of every other route keep
+        raising."""
+        return self._request("POST", path, json=json, allow_422=allow_422)
 
     def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
         """PUT that tolerates 409 conflicts: returns a conflict payload instead
@@ -172,6 +180,7 @@ class NimbusClient:
         json: dict[str, Any] | None = None,
         content: bool = False,
         allow_409: bool = False,
+        allow_422: bool = False,
     ) -> Any:
         try:
             resp = self._http.request(method, path, params=params, json=json)
@@ -196,6 +205,11 @@ class NimbusClient:
             if not code and isinstance(body, dict) and isinstance(body.get("detail"), dict):
                 code = body["detail"].get("code")
             return {"ok": False, "code": code or "conflict", "status": 409}
+        # 422 with allow_422 (protocol validate): the body IS the verdict the
+        # tool returns to the agent ({"valid": false, "errors": [...]}) —
+        # raising would bury it in a message string.
+        if resp.status_code == 422 and allow_422:
+            return self._json(resp)
         if resp.status_code >= 400:
             raise self._backend_error(resp)
         return resp.content if content else self._json(resp)

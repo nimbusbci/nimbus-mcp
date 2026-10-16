@@ -1,4 +1,4 @@
-"""FastMCP server assembly: one client, eighteen tool modules, stdio transport."""
+"""FastMCP server assembly: one client, nineteen tool modules, stdio transport."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from .tools import (
     live,
     plots,
     projects,
+    protocol,
     python,
     run,
     stats,
@@ -66,6 +67,12 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
 6) Personal calibration: calibration.start(confirm=true) while the subject wears the device —
    the Studio app shows cues; calibration.status polls; calibration.train turns the recording
    into the subject's own classifier.
+6b) Neurofeedback protocols: protocol.validate iterates the document (verdict data, no throw),
+   protocol.save(confirm=true) versions it, protocol.start_assignment(confirm=true) enrolls a
+   subject and prepares the deploy session (yoked sham arms need a donor recording upload);
+   simulated-source sessions are free, live hardware requires Pro. Poll protocol.session_status,
+   pause/resume/stop drive the session, protocol.export_stats gives paired pre/post stats +
+   figure + CSV (inferential from 3 completed sessions).
 7) BYO model code: python.validate(script) statically checks a python_model class
    (fit/predict contract, no execution), then run it via execution.run with the code
    inline in the node config (runtime auto|local|cloud — desktop app: isolated local
@@ -135,6 +142,7 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
         data,
         inspect,
         projects,
+        protocol,
         python,
         stats,
         foundation,
@@ -158,6 +166,11 @@ def serve(host: str = DEFAULT_SERVE_HOST, port: int = 8080, path: str = "/mcp") 
     must be combined with those per-request tokens.
     """
     from .hosted import HeaderCredentialClient
+    from .observability import init_gateway_sentry
+
+    # Deployment opt-in only (Fly sets SENTRY_DSN); stdio installs never
+    # reach this code path and the SDK rides the `sentry` extra.
+    init_gateway_sentry()
 
     client = HeaderCredentialClient(load_config())
     build_server(client).run(transport="http", host=host, port=port, path=path)

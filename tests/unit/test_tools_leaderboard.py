@@ -177,6 +177,73 @@ async def test_submit_forwards_track_and_defaults_to_cross_subject():
     assert seen[1]["track"] == "pretrained_few_trial"
 
 
+async def test_submit_backbone_declaration_posts_backbone_without_code():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        seen["body"] = json.loads(req.read())
+        return httpx.Response(
+            202,
+            json={"ok": True, "submissionId": "sub-bb", "status": "queued", "deduplicated": False},
+        )
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool(
+            "leaderboard.submit",
+            {
+                "dataset_id": "BNCI2014_001",
+                "name": "My CBRAMOD",
+                "backbone_kind": "cbramod",
+                "backbone_repo": "u/c",
+                "backbone_revision": "a" * 40,
+                "backbone_license": "MIT",
+                "track": "pretrained_few_trial",
+            },
+        )
+    # BYO backbone lane: the declaration rides a `backbone` object and no
+    # code key is sent (the REST route treats code and backbone as mutually
+    # exclusive; an absent code must not become an empty string).
+    assert "code" not in seen["body"]
+    assert "className" not in seen["body"]
+    assert "requirements" not in seen["body"]
+    assert seen["body"]["backbone"] == {
+        "kind": "cbramod",
+        "repo": "u/c",
+        "revision": "a" * 40,
+        "license": "MIT",
+    }
+    assert seen["body"]["track"] == "pretrained_few_trial"
+    assert seen["body"]["datasetId"] == "BNCI2014_001"
+    assert seen["body"]["name"] == "My CBRAMOD"
+    assert result.data["submissionId"] == "sub-bb"
+
+
+async def test_submit_code_only_body_has_no_backbone_key():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json
+
+        seen["body"] = json.loads(req.read())
+        return httpx.Response(
+            202,
+            json={"ok": True, "submissionId": "sub-c", "status": "queued", "deduplicated": False},
+        )
+
+    async with Client(make_server(handler)) as c:
+        await c.call_tool(
+            "leaderboard.submit",
+            {"dataset_id": "BNCI2014_001", "name": "My CSP", "code": "class M:\n ..."},
+        )
+    # Code-only submissions keep today's body exactly — no backbone key is
+    # injected when the declaration params are all omitted.
+    assert "backbone" not in seen["body"]
+    assert seen["body"]["code"] == "class M:\n ..."
+    assert seen["body"]["track"] == "cross_subject"
+
+
 async def test_status_gets_one_submission():
     seen = {}
 

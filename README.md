@@ -19,7 +19,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 
 | Capability | nimbus-mcp | bci-mcp | eeg-mcp | mne-mcp | ephys-mcp |
 |---|---|---|---|---|---|
-| Build + validate + run BCI pipelines | ✅ 48 tools | — | — | — | — |
+| Build + validate + run BCI pipelines | ✅ 58 tools | — | — | — | — |
 | Train on real data (MOABB packs, uploads) | ✅ | — | — | file I/O only | NWB/DANDI |
 | Bring-your-own model code (`python_model`) | ✅ local + cloud sandbox | — | — | — | — |
 | Benchmark leaderboard + server-side LOSO scoring | ✅ | — | — | — | — |
@@ -27,6 +27,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 | Live hardware sessions on a human | ✅ confirm-gated | ✅ | ✅ | — | — |
 | Modelless live band powers (focus/relaxation) | ✅ `stream.telemetry` | ✅ | ✅ | — | — |
 | Guided subject calibration | ✅ `calibration.*` | — | — | — | — |
+| Neurofeedback protocol sessions | ✅ `protocol.*` | — | — | — | — |
 | BIDS export (sha256 manifests) | ✅ `bids.*` | — | — | — | — |
 | Cluster-aware group statistics | ✅ `stats.grouped` | — | — | — | partial |
 | Transport | stdio + hosted HTTP gateway | stdio + HTTP | stdio | stdio | stdio |
@@ -199,7 +200,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 48 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 58 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -254,7 +255,7 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (48)
+## Tools (58)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
@@ -268,6 +269,10 @@ Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
 `stream.status`, `stream.telemetry`, `stream.stop`
 Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
 `calibration.pause`, `calibration.resume`, `calibration.train`
+Neurofeedback protocols: `protocol.validate`/`protocol.save` (versioned specs),
+`protocol.start_assignment` (confirm-gated; simulated sources free, live hardware Pro),
+`protocol.session_status`/`pause`/`resume`/`stop`, `protocol.export_stats`
+(paired pre/post stats + figure + CSV)
 Projects: `project.create`, `project.list`, `project.save`, `project.load`
 Python: `python.validate` (static contract check for BYO model code — no execution)
 Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring,

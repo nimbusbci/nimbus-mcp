@@ -9,7 +9,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE.txt ./
 COPY src ./src
-RUN pip install --no-cache-dir . && rm -rf src pyproject.toml README.md
+RUN pip install --no-cache-dir '.[sentry]' && rm -rf src pyproject.toml README.md
 
 USER nimbus
 ENV NIMBUS_MCP_HOST=0.0.0.0 \

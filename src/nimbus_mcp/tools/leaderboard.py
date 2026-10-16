@@ -34,10 +34,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
     def submit_leaderboard_model(
         dataset_id: str,
         name: str,
-        code: str,
+        code: str | None = None,
         class_name: str | None = None,
         requirements: list[str] | None = None,
         track: str = "cross_subject",
+        backbone_kind: str | None = None,
+        backbone_repo: str | None = None,
+        backbone_revision: str | None = None,
+        backbone_license: str | None = None,
     ) -> dict[str, Any]:
         """Submit a BYO python_model to a leaderboard track for server-side scoring.
 
@@ -54,6 +58,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             name: Display name on the board (<=100 chars).
             code: Python source defining a class with fit(X, y, info) and
                 predict(X) (<=256KB; validate first with python.validate).
+                Omit when declaring a backbone instead.
             class_name: Contract class to instantiate; omit to auto-detect.
             requirements: Optional PyPI requirements (e.g. ["sklearn>=1.4"]).
             track: "cross_subject" (default — full-data leave-one-subject-out,
@@ -62,17 +67,37 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 torch must declare its trained parameter count as a class
                 attribute — PARAMS_TRAINED = <int> — which becomes the row's
                 paramsTrained and is cross-checked when computable).
+            backbone_kind: Checkpoint family for the BYO backbone lane — one
+                of the zoo's supported kinds (e.g. "cbramod", "labram").
+            backbone_repo: HF 'org/name' repo id for the BYO backbone lane.
+            backbone_revision: Full 40-char commit SHA pinning the backbone.
+            backbone_license: License declared for the backbone checkpoint.
+            backbone_kind / backbone_repo / backbone_revision / backbone_license:
+                BYO pretrained-checkpoint lane (efficiency track only, track
+                must be "pretrained_few_trial"): declare an HF 'org/name' repo
+                pinned to a full 40-char commit SHA with a license declaration;
+                Nimbus loads it through the same pinned adapter as its zoo rows
+                and scores frozen-embeddings → linear probe server-side. When
+                backbone_repo is set, omit code.
         """
         body: dict[str, Any] = {
             "datasetId": dataset_id,
             "name": name,
-            "code": code,
             "track": track,
         }
+        if code is not None:
+            body["code"] = code
         if class_name:
             body["className"] = class_name
         if requirements:
             body["requirements"] = requirements
+        if backbone_repo is not None:
+            body["backbone"] = {
+                "kind": backbone_kind,
+                "repo": backbone_repo,
+                "revision": backbone_revision,
+                "license": backbone_license,
+            }
         return client.post("/api/leaderboard/submissions", json=body)
 
     @mcp.tool(name="leaderboard.status", annotations=READ_ONLY)
