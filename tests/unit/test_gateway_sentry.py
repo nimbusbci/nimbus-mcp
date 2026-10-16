@@ -48,3 +48,21 @@ def test_dsn_initializes_sdk_with_gateway_defaults(monkeypatch) -> None:
     assert kwargs["release"].startswith("nimbus-mcp@")
     assert kwargs["send_default_pii"] is False
     assert kwargs["traces_sample_rate"] == 0.0
+
+
+def test_expected_gateway_conditions_are_ignored(monkeypatch) -> None:
+    """Fly auto-stop SIGINTs the gateway on every idle cycle (the escaping
+    KeyboardInterrupt is a normal shutdown), and tokenless hosted calls raise
+    SetupRequired guidance — neither is a Sentry error."""
+    fake = _install_fake_sentry_sdk()
+    monkeypatch.setenv("SENTRY_DSN", "https://key@o0.ingest.sentry.io/1")
+    try:
+        assert init_gateway_sentry() is True
+    finally:
+        del sys.modules["sentry_sdk"]
+    kwargs = fake.init.call_args.kwargs
+    assert KeyboardInterrupt in kwargs["ignore_errors"]
+
+    from nimbus_mcp.setup_mode import SetupRequired
+
+    assert SetupRequired in kwargs["ignore_errors"]

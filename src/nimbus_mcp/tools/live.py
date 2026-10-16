@@ -247,10 +247,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "deviceType": connect.get("deviceType"),
             "channels": connect.get("channels"),
             "updateRateHz": started.get("updateRateHz"),
-            "hint": "Poll stream.status(session_id); stop with stream.stop(session_id). "
-            "Live telemetry (stream.telemetry) requires a DEPLOYED model session "
-            "(hub deploy / playback with a classifier); modelless hardware streams "
-            "have no telemetry — use stream.status for those.",
+            "hint": "Poll stream.telemetry(session_id) for live telemetry — "
+            "signal quality + focus/relaxation indicators, works for BOTH "
+            "deployed (adds predictions/confidence) and modelless hardware "
+            "streams; stream.status(session_id) for connection state; stop "
+            "with stream.stop(session_id).",
         }
 
     @mcp.tool(name="stream.status", annotations=READ_ONLY)

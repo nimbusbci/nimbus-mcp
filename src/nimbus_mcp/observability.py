@@ -23,6 +23,7 @@ def init_gateway_sentry() -> bool:
         return False
 
     from . import __version__
+    from .setup_mode import SetupRequired
 
     try:
         traces = float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0") or 0)
@@ -37,5 +38,10 @@ def init_gateway_sentry() -> bool:
         release=f"nimbus-mcp@{__version__}",
         send_default_pii=False,
         traces_sample_rate=traces,
+        # The Fly deployment runs with auto-stop: every idle stop SIGINTs the
+        # process and the KeyboardInterrupt escaping asyncio.run() is a normal
+        # shutdown, not an error. SetupRequired is the hosted gateway's
+        # guidance path for tokenless client calls — expected, not an error.
+        ignore_errors=[KeyboardInterrupt, SetupRequired],
     )
     return True

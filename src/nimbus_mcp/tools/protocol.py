@@ -11,7 +11,8 @@ Backend contracts (verified against nimbus_backend):
 - POST /api/protocol-assignments ``{protocolId, protocolVersion, subjectLabel,
   arm, yokedDonorUploadId?}`` → ``201 {"assignmentId", "sessionIndex"}``. The
   backend validates the donor against the arm's yoked blocks (owned upload,
-  deploy-HDF5 indicators group, ≥ yoked-seconds × 4 Hz samples).
+  deploy-HDF5 indicators group, coverage ≥ ~90% of yoked-seconds at the
+  donor's derived indicator rate).
 - Deploy-graph persistence rides ``POST /api/projects/{uuid}/prepare-zero-cal-deploy``
   (``{"nChannels", "samplingRate", "execGraph", "layout"}``): a train-stage run
   of a hardware_device-headed graph cannot execute offline (bandpass needs
@@ -448,7 +449,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
     def export_stats(assignment_id: str) -> dict[str, Any]:
         """Paired pre/post analysis for one assignment's recorded sessions:
         per-block aggregates (descriptive + CSV), paired t / Wilcoxon / dz
-        (inferential needs ≥ 3 completed sessions), specificity notes, the
+        (per-statistic minimums: paired t and Cohen's dz need ≥ 3 completed
+        sessions, Wilcoxon needs ≥ 5), specificity notes, the
         adaptive-threshold trajectory, and a pre/post figure (base64 PNG —
         render or save it to look at the effect). An assignment with no
         recordings yet returns the empty payload with a note, never an error.

@@ -141,6 +141,41 @@ async def test_start_stream_chains_connect_then_start():
     assert result.data["started"] is True and result.data["sessionId"] == "sess-1"
 
 
+async def test_start_stream_hint_covers_modelless_telemetry():
+    """The start hint must not claim modelless streams lack telemetry (stale
+    since v0.12 modelless telemetry): stream.telemetry works for BOTH stream
+    kinds; stream.status is the connection-state poller."""
+    calls: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req.url.path)
+        if req.url.path == "/api/hardware/connect":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "status": "success",
+                    "sessionId": "sess-1",
+                    "connected": True,
+                    "deviceType": "brainbit",
+                    "channels": 4,
+                },
+            )
+        if req.url.path == "/api/hardware/start-stream":
+            return httpx.Response(
+                200, json={"ok": True, "started": True, "sessionId": "sess-1", "updateRateHz": 2.0}
+            )
+        raise AssertionError(req.url.path)
+
+    async with Client(make_server(handler, calls=calls)) as c:
+        result = await c.call_tool(
+            "stream.start", {"device_type": "brainbit", "confirm": True, "idle_timeout_sec": 0}
+        )
+    hint = result.data["hint"]
+    assert "stream.telemetry" in hint
+    assert "have no telemetry" not in hint
+
+
 async def test_stream_status_query_param():
     def handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path == "/api/hardware/stream-status"
