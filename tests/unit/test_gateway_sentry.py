@@ -63,6 +63,10 @@ def test_expected_gateway_conditions_are_ignored(monkeypatch) -> None:
     kwargs = fake.init.call_args.kwargs
     assert KeyboardInterrupt in kwargs["ignore_errors"]
 
+    from nimbus_mcp.errors import McpToolError
     from nimbus_mcp.setup_mode import SetupRequired
 
     assert SetupRequired in kwargs["ignore_errors"]
+    # Agent-facing tool failures (bad arguments, rejected calls) are the tool
+    # result, not gateway defects. FastMCP logs them at error.
+    assert McpToolError in kwargs["ignore_errors"]

@@ -61,6 +61,21 @@ class FakeBackend:
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
+        if path == "/api/me/profile":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "userId": "u1",
+                    "capabilities": {},
+                    "computeOrigin": {
+                        "mode": "hosted",
+                        "nimbusVersion": "1.0.0",
+                        "desktopVersion": None,
+                        "mcpLocalBridge": False,
+                    },
+                },
+            )
         if path == "/api/execute":
             self.execute_attempts += 1
             exec_id = f"exec_{self.execute_attempts}"
@@ -137,6 +152,18 @@ async def wait_for_terminal(c: Client, experiment_id: str, timeout: float = 10.0
             return snapshot
         await asyncio.sleep(0.05)
     return snapshot
+
+
+async def test_experiment_payload_includes_compute_origin_from_profile(monkeypatch):
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+    async with Client(make_server(backend)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        snapshot = await wait_for_terminal(c, result.data["experimentId"])
+    assert snapshot.data["computeOrigin"]["mode"] == "hosted"
+    assert snapshot.data["computeOrigin"]["mcpLocalBridge"] is False
 
 
 async def test_run_experiment_single_run_completes_with_aggregates(monkeypatch):
@@ -298,6 +325,8 @@ async def test_expired_token_on_summary_poll_is_not_retried(monkeypatch):
 
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
+        if path == "/api/me/profile":
+            return httpx.Response(401, json={"detail": "no"})
         if path == "/api/execute":
             return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
         if path.endswith("/summary"):
@@ -325,6 +354,8 @@ async def test_expired_token_on_result_fetch_is_not_result_fetch_failed(monkeypa
 
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
+        if path == "/api/me/profile":
+            return httpx.Response(401, json={"detail": "no"})
         if path == "/api/execute":
             return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
         if path.endswith("/summary"):

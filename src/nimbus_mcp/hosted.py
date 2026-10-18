@@ -269,11 +269,23 @@ class HeaderCredentialClient:
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return self._call("get", path, params)
 
-    def post(self, path: str, json: dict[str, Any] | None = None) -> Any:
-        return self._call("post", path, json)
+    def post(
+        self, path: str, json: dict[str, Any] | None = None, *, allow_422: bool = False
+    ) -> Any:
+        """POST, forwarding ``allow_422`` to the per-token client.
+
+        ``protocol.validate`` opts into returning a 422 verdict body. Dropping
+        the flag here TypeErrors on every hosted call (the inner
+        ``NimbusClient.post`` accepts it; this wrapper is the gateway's only
+        client).
+        """
+        return self._call("post", path, json, allow_422=allow_422)
 
     def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
         return self._call("put", path, json)
+
+    def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self._call("delete", path, params)
 
     def get_bytes(self, path: str) -> bytes:
         return self._call("get_bytes", path)

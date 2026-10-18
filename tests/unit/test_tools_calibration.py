@@ -106,6 +106,122 @@ TRAIN_TEMPLATE = {
     },
 }
 
+# Mirrors the real p300_hardware_calibration template (storage/templates/
+# calibration/p300_hardware_calibration.yaml): hardware_device node with the
+# recording geometry calibration.train reads for the default-template path.
+P300_CALIBRATION_TEMPLATE = {
+    "template": {
+        "id": "p300_hardware_calibration",
+        "name": "P300 hardware calibration",
+        "version": "3",
+        "calibrate": {
+            "nodes": [
+                {
+                    "id": "device",
+                    "type": "hardware_device",
+                    "config": {
+                        "buildMode": "live_record",
+                        "deviceType": "synthetic",
+                        "channels": 8,
+                        "samplingRate": 250,
+                    },
+                },
+                {
+                    "id": "protocol",
+                    "type": "trial_protocol",
+                    "config": {"paradigm": "p300"},
+                },
+                {
+                    "id": "recorder",
+                    "type": "calibration_recorder",
+                    "config": {"format": "hdf5"},
+                },
+            ],
+            "connections": [],
+        },
+    }
+}
+
+
+def _p300_calibration_yaml_node_types() -> list[str]:
+    yaml_path = (
+        Path(__file__).resolve().parents[3]
+        / "backend-py"
+        / "nimbus_backend"
+        / "storage"
+        / "templates"
+        / "calibration"
+        / "p300_hardware_calibration.yaml"
+    )
+    text = yaml_path.read_text(encoding="utf-8")
+    calibrate, _, _rest = text.partition("\ntrain:")
+    types: list[str] = []
+    in_nodes = False
+    for line in calibrate.splitlines():
+        if line.startswith("  nodes:"):
+            in_nodes = True
+            continue
+        if in_nodes and line.startswith("  connections:"):
+            break
+        if in_nodes and line.strip().startswith("type:"):
+            types.append(line.split("type:", 1)[1].strip())
+    return types
+
+
+def test_p300_calibration_mock_node_types_match_template():
+    mock_types = [
+        node["type"]
+        for node in P300_CALIBRATION_TEMPLATE["template"]["calibrate"]["nodes"]
+    ]
+    assert mock_types == _p300_calibration_yaml_node_types()
+    assert mock_types == ["hardware_device", "trial_protocol", "calibration_recorder"]
+
+
+# Mirrors the real p300_hardware_xdawn_lda template (storage/templates/p300/
+# p300_hardware_xdawn_lda.yaml): the first node (id "data") is a custom_data
+# node pinning the latest calibration run, carrying the p300 non-data config
+# (mode: all, paradigm: p300, nClasses: 2, classLabels non_target/target) the
+# rewire must PRESERVE.
+P300_TRAIN_TEMPLATE = {
+    "ok": True,
+    "template": {
+        "id": "p300_hardware_xdawn_lda",
+        "name": "P300 (Headband, Adaptive) - xDAWN → Nimbus LDA",
+        "version": "3",
+        "train": {
+            "nodes": [
+                {
+                    "id": "data",
+                    "type": "custom_data",
+                    "config": {
+                        "mode": "all",
+                        "paradigm": "p300",
+                        "nClasses": 2,
+                        "classLabels": ["non_target", "target"],
+                        "format": "hdf5",
+                        "samplingRate": 250.0,
+                        "source": {"kind": "calibration_last_run"},
+                    },
+                },
+                {"id": "xdawn", "type": "xdawn", "config": {"nComponents": 2, "reg": 0}},
+                {"id": "lda", "type": "rxlda_sdk", "config": {}},
+            ],
+            "connections": [
+                {"from": "data", "to": "xdawn"},
+                {"from": "xdawn", "to": "lda"},
+            ],
+        },
+        "layout": {
+            "nodes": {
+                "data": {"x": 0.0, "y": 80.0},
+                "xdawn": {"x": 640.0, "y": 80.0},
+                "lda": {"x": 800.0, "y": 80.0},
+            }
+        },
+        "calibrate": None,
+    }
+}
+
 COMPLETED_LIVE = {
     "ok": True,
     "executionId": "exec_1",
@@ -286,9 +402,9 @@ async def test_status_merges_complete_upload():
 
 
 async def test_status_complete_without_recording_hints_unavailable():
-    """Complete but calibration null (desktop-local backend, or nothing linked):
-    the hint must say the recording is unavailable — NOT point at train,
-    which needs the uploadId."""
+    """Complete but calibration null (nothing linked, or a pre-linkage
+    desktop-local recording): the hint must say the recording is unavailable —
+    NOT point at train, which needs the uploadId."""
     no_upload_live = dict(COMPLETED_LIVE, calibration=None)
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -376,10 +492,79 @@ async def test_train_wires_calibration_run_ref():
     assert "execution.get" in result.data["pollHint"]
 
 
-async def test_train_non_mi_paradigm_requires_template():
+async def test_train_p300_default_template():
+    """p300 train WITHOUT template_id resolves the default: fetches the p300
+    calibration template (recording geometry), the p300_hardware_xdawn_lda
+    train template, rewires its first custom_data node onto the recorded
+    upload (preserving the p300 non-data config), and posts execute."""
+    seen: dict[str, httpx.Request] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen[req.url.path] = req
+        if req.url.path == "/api/calibration-live/exec_1":
+            return httpx.Response(200, json=COMPLETED_LIVE)
+        if req.url.path == "/api/templates/p300_hardware_calibration":
+            return httpx.Response(200, json=P300_CALIBRATION_TEMPLATE)
+        if req.url.path == "/api/templates/p300_hardware_xdawn_lda":
+            return httpx.Response(200, json=P300_TRAIN_TEMPLATE)
+        if req.url.path == "/api/execute":
+            return httpx.Response(200, json={"ok": True, "executionId": "exec_p"})
+        raise AssertionError(req.url.path)
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool(
+            "calibration.train", {"execution_id": "exec_1", "paradigm": "p300"}
+        )
+    # Exactly the default-path fetches: live → calibration template → default
+    # train template → execute.
+    assert list(seen) == [
+        "/api/calibration-live/exec_1",
+        "/api/templates/p300_hardware_calibration",
+        "/api/templates/p300_hardware_xdawn_lda",
+        "/api/execute",
+    ]
+    body = json.loads(seen["/api/execute"].read())
+    assert body["stage"] == "train"
+    graph = body["train"]
+    nodes = {n["id"]: n for n in graph["nodes"]}
+    assert nodes["data"]["type"] == "custom_data"
+    # Rewire: source pinned to the upload; non-data config (mode/paradigm/
+    # nClasses/classLabels) preserved; samplingRate from the calibration
+    # template's device node (250), not the yaml's own 250.0 float.
+    assert nodes["data"]["config"] == {
+        "mode": "all",
+        "paradigm": "p300",
+        "nClasses": 2,
+        "classLabels": ["non_target", "target"],
+        "format": "hdf5",
+        "samplingRate": 250,
+        "source": {"kind": "calibration_run", "uploadId": "up_9"},
+        "filePath": "",
+    }
+    assert graph["connections"] == P300_TRAIN_TEMPLATE["template"]["train"]["connections"]
+    assert body["layout"]["nodes"]["data"] == {"x": 0.0, "y": 80.0}
+    assert result.data["trainExecutionId"] == "exec_p"
+    assert result.data["calibrationUploadId"] == "up_9"
+
+
+async def test_train_sart_without_template_names_defaulted_paradigms():
+    """sart/target_hit have NO train templates anywhere (their calibration
+    templates ship empty train: sections) — they keep the explicit-template
+    requirement. The error message must truthfully name BOTH defaulted
+    paradigms (mi AND p300)."""
     async with Client(make_server(lambda r: (_ for _ in ()).throw(AssertionError("HTTP!")))) as c:
-        with pytest.raises(Exception, match="mi_headband_csp_lda"):
-            await c.call_tool("calibration.train", {"execution_id": "exec_1", "paradigm": "p300"})
+        with pytest.raises(Exception) as ei:
+            await c.call_tool("calibration.train", {"execution_id": "exec_1", "paradigm": "sart"})
+        with pytest.raises(Exception) as ei_target:
+            await c.call_tool(
+                "calibration.train", {"execution_id": "exec_1", "paradigm": "target_hit"}
+            )
+    message = str(ei.value)
+    assert "No default train template for paradigm 'sart'" in message
+    assert "template_id" in message
+    assert "mi_headband_csp_lda" in message
+    assert "p300_hardware_xdawn_lda" in message
+    assert "p300_hardware_xdawn_lda" in str(ei_target.value)
 
 
 async def test_train_explicit_graph_skips_calibration_template_fetch():

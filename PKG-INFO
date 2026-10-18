@@ -1,6 +1,6 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.14.2
+Version: 0.14.3
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
@@ -423,7 +423,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 
 | Capability | nimbus-mcp | bci-mcp | eeg-mcp | mne-mcp | ephys-mcp |
 |---|---|---|---|---|---|
-| Build + validate + run BCI pipelines | ✅ 58 tools | — | — | — | — |
+| Build + validate + run BCI pipelines | ✅ 59 tools | — | — | — | — |
 | Train on real data (MOABB packs, uploads) | ✅ | — | — | file I/O only | NWB/DANDI |
 | Bring-your-own model code (`python_model`) | ✅ local + cloud sandbox | — | — | — | — |
 | Benchmark leaderboard + server-side LOSO scoring | ✅ | — | — | — | — |
@@ -604,7 +604,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 58 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 59 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -659,7 +659,7 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (58)
+## Tools (59)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
@@ -677,7 +677,7 @@ Neurofeedback protocols: `protocol.validate`/`protocol.save` (versioned specs),
 `protocol.start_assignment` (confirm-gated; simulated sources free, live hardware Pro),
 `protocol.session_status`/`pause`/`resume`/`stop`, `protocol.export_stats`
 (paired pre/post stats + figure + CSV)
-Projects: `project.create`, `project.list`, `project.save`, `project.load`
+Projects: `project.create`, `project.list`, `project.save`, `project.load`, `project.delete` (needs `confirm=true`)
 Python: `python.validate` (static contract check for BYO model code — no execution)
 Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring,
 202 + `submissionId`; `track="pretrained_few_trial"` = efficiency track:
@@ -849,7 +849,8 @@ calibration.train(execution_id="…")
 ```
 
 `mi` trains on the default `mi_headband_csp_lda` template (CAR → 8-30 Hz
-bandpass → CSP → LDA); `p300` / `sart` / `target_hit` have no default train
+bandpass → CSP → LDA) and `p300` on `p300_hardware_xdawn_lda` (xDAWN → LDA on
+the recorded flash epochs); `sart` / `target_hit` have no default train
 template — pass an explicit `template_id` (from `catalog.templates`) or your
 own `train_graph` to `calibration.train`. Either way the first data node is
 rewired onto the recorded upload (`custom_data` source pinned to the
@@ -863,9 +864,10 @@ freemium-gated (free-tier requests are 403 by the node policy). Local
 `X-MCP-Key` principals pass when the desktop app flags the signed-in Pro
 session (`MCP_LOCAL_IS_PRO`); otherwise the node policy applies to them too.
 
-The calibrate→train handoff requires a Postgres-backed backend (hosted or local
-dev): a desktop-local session completes and records, but its upload can't be
-resolved by MCP train today.
+The calibrate→train handoff resolves on every backend, desktop-local included:
+recordings made with the current build carry upload↔execution linkage in the
+desktop store. Recordings from older builds predate that linkage — rerun
+`calibration.start` for those (the tool's status hint says the same).
 
 ## Safety
 

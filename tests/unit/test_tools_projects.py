@@ -136,3 +136,53 @@ async def test_load_pipeline_returns_train_graph():
         r = await c.call_tool("project.load", {"project_id": "p1"})
     assert r.data["train"]["nodes"][0]["type"] == "public_data"
     assert r.data["subject"] == "S01"
+
+
+async def test_delete_project_refuses_without_confirm():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not touch HTTP without confirm")
+
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool("project.delete", {"project_id": "p1"})
+    assert r.data["deleted"] is False
+    assert "confirm=true" in r.data["message"]
+
+
+async def test_delete_project_sends_delete_with_confirm():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["method"], seen["path"] = req.method, req.url.path
+        return httpx.Response(
+            200, json={"ok": True, "id": "p1", "message": "Project removed successfully"}
+        )
+
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool("project.delete", {"project_id": "p1", "confirm": True})
+    assert seen == {"method": "DELETE", "path": "/api/projects/p1"}
+    assert r.data["deleted"] is True and r.data["projectId"] == "p1"
+
+
+async def test_delete_project_rejects_traversal_id():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not touch HTTP for an unsafe id")
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="project id"):
+            await c.call_tool("project.delete", {"project_id": "../evil", "confirm": True})
+
+
+async def test_delete_project_404_surfaces_error():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            json={
+                "code": "nimbus.project.not_found",
+                "title": "NotFound",
+                "detail": "Project not found",
+            },
+        )
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="Project not found"):
+            await c.call_tool("project.delete", {"project_id": "p1", "confirm": True})

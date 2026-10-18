@@ -119,6 +119,7 @@ def test_null_client_every_method_raises_setup_required():
         lambda: null.ensure_ready(),
         lambda: null.get("/api/me/profile"),
         lambda: null.post("/api/execute", json={}),
+        lambda: null.post("/api/protocols/validate", json={}, allow_422=True),
         lambda: null.put("/x", json={}),
         lambda: null.get_bytes("/x"),
         lambda: null.post_bytes("/x"),

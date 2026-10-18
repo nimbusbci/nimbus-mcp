@@ -244,6 +244,53 @@ def test_backend_error_code_is_none_without_problem_body():
     assert excinfo.value.code is None
 
 
+def test_backend_error_appends_correlation_id_from_body():
+    c = make_client(
+        lambda req: httpx.Response(
+            500,
+            json={
+                "title": "InternalServerError",
+                "detail": "An unexpected error occurred.",
+                "code": "nimbus.server.internal_error",
+                "correlationId": "abc12345",
+            },
+        )
+    )
+    with pytest.raises(McpToolError) as excinfo:
+        c.get("/api/x")
+    assert "correlationId: abc12345" in str(excinfo.value)
+    assert excinfo.value.correlation_id == "abc12345"
+
+
+def test_backend_error_falls_back_to_correlation_header():
+    c = make_client(
+        lambda req: httpx.Response(502, text="bad gateway", headers={"X-Correlation-ID": "hdr-9"})
+    )
+    with pytest.raises(McpToolError) as excinfo:
+        c.get("/api/x")
+    assert "correlationId: hdr-9" in str(excinfo.value)
+    assert excinfo.value.correlation_id == "hdr-9"
+
+
+def test_backend_error_without_correlation_id_has_none():
+    c = make_client(lambda req: httpx.Response(500, text="boom"))
+    with pytest.raises(McpToolError) as excinfo:
+        c.get("/api/x")
+    assert excinfo.value.correlation_id is None
+    assert "correlationId" not in str(excinfo.value)
+
+
+def test_delete_sends_delete_verb():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["method"] = req.method
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_client(handler).delete("/api/projects/p1") == {"ok": True}
+    assert seen["method"] == "DELETE"
+
+
 def test_bound_client_yields_self_and_never_closes():
     """bound_client(): worker-context protocol. The plain client is
     context-free, so it yields itself and MUST NOT close on context exit —

@@ -34,6 +34,12 @@ def _profile() -> dict:
             "freeTrainingRunsMonthlyLimit": 10,
             "freeTrainingRunsRemaining": 7,
         },
+        "computeOrigin": {
+            "mode": "local",
+            "nimbusVersion": "1.0.0",
+            "desktopVersion": "0.3.13",
+            "mcpLocalBridge": True,
+        },
     }
 
 
@@ -72,6 +78,7 @@ async def test_whoami_token_mode_full_payload():
     assert data["email"] == "dev@nimbus.test"
     assert data["plan"] == {"isPro": False, "pioneerAccess": True}
     assert data["freeRuns"] == {"monthlyLimit": 10, "remaining": 7}
+    assert data["computeOrigin"] == _profile()["computeOrigin"]
     assert data["source"] == "store"
     token_info = data["token"]
     assert token_info["name"] == "dev token"

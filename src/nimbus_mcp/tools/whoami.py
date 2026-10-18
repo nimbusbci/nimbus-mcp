@@ -66,6 +66,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "monthlyLimit": caps.get("freeTrainingRunsMonthlyLimit"),
                 "remaining": caps.get("freeTrainingRunsRemaining"),
             },
+            "computeOrigin": profile.get("computeOrigin"),
             "token": token_info,
             "source": report["source"],
         }

@@ -16,6 +16,13 @@ TRAIN_GRAPH = {
     "connections": [{"from": "d", "to": "m"}],
 }
 
+COMPUTE_ORIGIN = {
+    "mode": "hosted",
+    "nimbusVersion": "9.9.9-test",
+    "desktopVersion": None,
+    "mcpLocalBridge": False,
+}
+
 SUMMARY_ROW = {
     "executionId": "exec_1",
     "status": "completed",
@@ -23,6 +30,7 @@ SUMMARY_ROW = {
     "pipelineName": "mi",
     "metrics": {"accuracyPct": 70.0, "kappa": 0.5},
     "hasArtifacts": True,
+    "computeOrigin": COMPUTE_ORIGIN,
 }
 
 FULL_RESULT = {
@@ -41,7 +49,7 @@ FULL_RESULT = {
         "confusionMatrixLabels": ["left", "right"],
         "perClassAccuracy": [{"class": "left", "accuracyPct": 83.3}],
         "artifactFiles": [{"name": "nimbus_lda.pkl"}],
-        "metadata": {"big": "x" * 10_000},
+        "metadata": {"big": "x" * 10_000, "computeOrigin": COMPUTE_ORIGIN},
     },
 }
 
@@ -106,6 +114,17 @@ async def test_run_pipeline_passes_explicit_layout_through():
     assert seen["body"]["layout"] == explicit
 
 
+async def test_get_execution_passes_compute_origin_when_present():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"ok": True, "executionId": "exec_1", "summary": SUMMARY_ROW}
+        )
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool("execution.get", {"execution_id": "exec_1"})
+    assert result.data["computeOrigin"] == COMPUTE_ORIGIN
+
+
 async def test_get_execution_returns_summary_row():
     def handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path == "/api/executions/exec_1/summary"
@@ -140,6 +159,7 @@ async def test_get_results_trimmed_by_default():
     assert result.data["metrics"]["kappa"] == 0.55
     assert result.data["confusionMatrix"] == [[10, 2], [3, 15]]
     assert "metadata" not in result.data  # trimmed
+    assert result.data["computeOrigin"] == COMPUTE_ORIGIN
 
 
 async def test_get_results_full_includes_everything():
@@ -185,3 +205,102 @@ async def test_cancel_execution_rejects_bad_execution_id():
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="Invalid execution id"):
             await c.call_tool("execution.cancel", {"execution_id": "../evil"})
+
+
+# ── duplicate in-flight run warning (non-blocking) ───────────────────────────
+
+
+def _dup_handler(running_rows, snapshots=None, posts=None):
+    snapshots = snapshots or {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if req.method == "POST" and path == "/api/execute":
+            if posts is not None:
+                posts.append(1)
+            return httpx.Response(200, json={"ok": True, "executionId": "exec_new"})
+        if path == "/api/executions":
+            assert req.url.params.get("status") == "running"
+            return httpx.Response(
+                200, json={"executions": running_rows, "total": len(running_rows)}
+            )
+        if path.endswith("/pipeline"):
+            exec_id = path.split("/")[-2]
+            if exec_id in snapshots:
+                return httpx.Response(
+                    200, json={"ok": True, "executionId": exec_id, "pipeline": snapshots[exec_id]}
+                )
+            return httpx.Response(404, json={"detail": "nope"})
+        raise AssertionError((req.method, path))
+
+    return handler
+
+
+def test_graph_fingerprint_is_order_and_layout_insensitive():
+    shuffled = {
+        "nodes": list(reversed(TRAIN_GRAPH["nodes"])),
+        "connections": TRAIN_GRAPH["connections"],
+        "layout": {"nodes": {"d": {"x": 9, "y": 9}}},
+    }
+    assert run.graph_fingerprint(shuffled) == run.graph_fingerprint(TRAIN_GRAPH)
+    changed = {
+        "nodes": [
+            TRAIN_GRAPH["nodes"][0],
+            {"id": "m", "type": "rxlda_sdk", "config": {"x": 1}},
+        ],
+        "connections": TRAIN_GRAPH["connections"],
+    }
+    assert run.graph_fingerprint(changed) != run.graph_fingerprint(TRAIN_GRAPH)
+
+
+async def test_run_without_running_executions_has_no_warning():
+    async with Client(make_server(_dup_handler([]))) as c:
+        r = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
+    assert "warning" not in r.data and r.data["executionId"] == "exec_new"
+
+
+async def test_run_warns_when_identical_graph_running_per_backend_snapshot():
+    snaps = {"exec_old": {"train": TRAIN_GRAPH, "subject": "S01"}}
+    posts: list[int] = []
+    handler = _dup_handler([{"executionId": "exec_old"}], snaps, posts)
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
+    assert posts == [1], "duplicate must not block the run"
+    assert r.data["executionId"] == "exec_new"
+    assert r.data["duplicateOf"] == ["exec_old"]
+    assert "exec_old" in r.data["warning"]
+
+
+async def test_run_no_warning_for_different_graph():
+    other = {"nodes": [{"id": "d", "type": "public_data", "config": {}}], "connections": []}
+    handler = _dup_handler([{"executionId": "exec_old"}], {"exec_old": {"train": other}})
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
+    assert "warning" not in r.data
+
+
+async def test_second_identical_run_in_same_session_warns_via_registry():
+    """Runs this process started are matched from memory (no snapshot fetch)."""
+    graph = {"nodes": [{"id": "z", "type": "public_data", "config": {"u": 1}}], "connections": []}
+    running: list[dict] = []
+    handler = _dup_handler(running)
+    async with Client(make_server(handler)) as c:
+        first = await c.call_tool("execution.run", {"train_graph": graph})
+        assert "warning" not in first.data
+        running.append({"executionId": "exec_new"})  # the first run is now in flight
+        second = await c.call_tool("execution.run", {"train_graph": graph})
+    assert second.data["duplicateOf"] == ["exec_new"]
+
+
+async def test_duplicate_preflight_failure_never_blocks_run():
+    posts: list[int] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/execute":
+            posts.append(1)
+            return httpx.Response(200, json={"ok": True, "executionId": "exec_new"})
+        return httpx.Response(500, text="boom")
+
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
+    assert posts == [1] and "warning" not in r.data

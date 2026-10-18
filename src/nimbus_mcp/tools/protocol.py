@@ -210,9 +210,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         return out
 
     @mcp.tool(name="protocol.save", annotations=MUTATING)
-    def save(
-        spec: dict[str, Any], confirm: bool = False, name: str | None = None
-    ) -> dict[str, Any]:
+    def save(spec: dict[str, Any], confirm: bool = False) -> dict[str, Any]:
         """Validate and persist the NEXT VERSION of a protocol document
         (confirm-gated: each call appends a version row; accidental calls
         clutter the version history). Edits create a new version — the
@@ -221,9 +219,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Args:
             spec: Wire-format protocol document (validate first to iterate).
             confirm: MUST be true to write.
-            name: Optional label for this save (echoed in this tool's
-                response only — the backend forbids extra keys, so it is not
-                persisted with the version).
         """
         if not confirm:
             return {
@@ -236,7 +231,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "saved": True,
             "protocolId": payload.get("protocolId"),
             "version": payload.get("version"),
-            **({"name": name} if name is not None else {}),
         }
 
     @mcp.tool(name="protocol.list", annotations=READ_ONLY)
@@ -253,7 +247,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         confirm: bool = False,
         yoked_donor_upload_id: str | None = None,
         execution_id: str | None = None,
-        name: str | None = None,
     ) -> dict[str, Any]:
         """Enroll a subject and prepare their neurofeedback deploy session
         (confirm-gated — a session runs on a human). Creates the assignment
@@ -286,7 +279,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 arm's blocks resolve to yoked — the backend validates coverage).
             execution_id: Optional completed execution whose stored graph
                 carries a protocol_session node; default clones the template.
-            name: Optional display name for the prepared run.
         """
         if not confirm:
             return {
@@ -364,7 +356,6 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "channels": channels,
             "samplingRate": sampling_rate,
             "statusUrl": f"/ws/realtime/{session_id}" if session_id else None,
-            **({"name": name} if name is not None else {}),
             "dashboardHint": (
                 "Open the deploy session over WS: auth → init_deployment(modelExecutionId="
                 f"{execution}, dataSource simulated"

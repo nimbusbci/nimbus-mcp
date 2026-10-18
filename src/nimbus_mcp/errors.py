@@ -12,7 +12,9 @@ class McpToolError(Exception):
     Backend HTTP failures additionally carry the response ``status_code`` and
     the backend's stable dotted ``code`` (e.g.
     ``nimbus.data.describe_local_forbidden``) as attributes, so tools can
-    branch on them programmatically instead of parsing message text.
+    branch on them programmatically instead of parsing message text. The
+    optional ``correlation_id`` is the backend's per-request id (also in the
+    message) to quote in support reports.
     """
 
     def __init__(
@@ -21,7 +23,9 @@ class McpToolError(Exception):
         *,
         status_code: int | None = None,
         code: str | None = None,
+        correlation_id: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
+        self.correlation_id = correlation_id

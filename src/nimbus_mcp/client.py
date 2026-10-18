@@ -152,6 +152,10 @@ class NimbusClient:
         of raising, so callers can implement optimistic-revision retries."""
         return self._request("PUT", path, json=json, allow_409=True)
 
+    def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """DELETE; >=400 raises like every other verb (404 = already gone)."""
+        return self._request("DELETE", path, params=params)
+
     def get_bytes(self, path: str) -> bytes:
         return self._request("GET", path, content=True)
 
@@ -249,10 +253,17 @@ class NimbusClient:
         # place the link is added (v0.5 Task 5), so every tool benefits.
         if code in _QUOTA_ERROR_CODES:
             msg = f"{msg} Upgrade or manage your plan: {QUOTA_PRICING_URL}"
+        cid = body.get("correlationId") if isinstance(body, dict) else None
+        if not (isinstance(cid, str) and cid.strip()):
+            cid = resp.headers.get("X-Correlation-ID")
+        cid = cid.strip() if isinstance(cid, str) and cid.strip() else None
+        if cid:
+            msg = f"{msg} (correlationId: {cid})"
         return McpToolError(
             f"Nimbus API error {resp.status_code}: {msg}",
             status_code=resp.status_code,
             code=code if isinstance(code, str) else None,
+            correlation_id=cid,
         )
 
 
@@ -299,10 +310,21 @@ class NullClient:
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         raise self._setup_required()
 
-    def post(self, path: str, json: dict[str, Any] | None = None) -> Any:
+    def post(
+        self, path: str, json: dict[str, Any] | None = None, *, allow_422: bool = False
+    ) -> Any:
+        """Match :meth:`NimbusClient.post`, including ``allow_422``.
+
+        Setup mode must raise :class:`SetupRequired`, not ``TypeError``, when
+        a tool (``protocol.validate``) passes the flag.
+        """
+        del allow_422  # signature parity only; there is no request to send
         raise self._setup_required()
 
     def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        raise self._setup_required()
+
+    def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
         raise self._setup_required()
 
     def get_bytes(self, path: str) -> bytes:

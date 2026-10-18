@@ -197,12 +197,21 @@ async def test_save_posts_spec_and_returns_version():
         raise AssertionError(req.url.path)
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool(
-            "protocol.save", {"spec": SPEC, "confirm": True, "name": "run 1"}
-        )
+        result = await c.call_tool("protocol.save", {"spec": SPEC, "confirm": True})
     assert json.loads(seen["/api/protocols"].read()) == {"spec": SPEC}
     assert result.data["protocolId"] == "focus-nf-v1"
     assert result.data["version"] == 2
+    assert "name" not in result.data  # no echoed-only label
+
+
+async def test_save_and_start_assignment_have_no_name_param():
+    """`name` was an echoed-only param — never persisted (the backend forbids
+    extra keys; versions carry spec.name) — so it must not be on the surface."""
+    async with Client(make_server(lambda r: None)) as c:
+        tools = {t.name: t for t in await c.list_tools()}
+    for tool_name in ("protocol.save", "protocol.start_assignment"):
+        props = tools[tool_name].input_schema.get("properties", {})
+        assert "name" not in props, f"{tool_name} must not declare a name param"
 
 
 async def test_list_gets_protocols():
@@ -291,7 +300,6 @@ async def test_start_assignment_template_path_mints_and_connects():
                 "arm": "sham",
                 "yoked_donor_upload_id": "up_7",
                 "confirm": True,
-                "name": "S01 sham run",
             },
         )
     assert result.data["started"] is True
@@ -300,6 +308,7 @@ async def test_start_assignment_template_path_mints_and_connects():
     assert result.data["sessionId"] == "sess_9"
     assert result.data["channels"] == 4 and result.data["samplingRate"] == 250.0
     assert result.data["statusUrl"]
+    assert "name" not in result.data  # no echoed-only label
 
     # Assignment body: exact camelCase wire shape (extra="forbid").
     body = json.loads(seen["/api/protocol-assignments"][0].read())

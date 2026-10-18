@@ -57,12 +57,20 @@ class RunRow:
 
 
 class ExperimentState:
-    def __init__(self, experiment_id: str, runs: list[RunRow], max_in_flight: int) -> None:
+    def __init__(
+        self,
+        experiment_id: str,
+        runs: list[RunRow],
+        max_in_flight: int,
+        *,
+        compute_origin: dict[str, Any] | None = None,
+    ) -> None:
         self.experiment_id = experiment_id
         self.runs = runs
         self.max_in_flight = max_in_flight
         self.status = "running"
         self.aggregates: dict[str, Any] | None = None
+        self.compute_origin = compute_origin
 
     def payload(self) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
@@ -84,6 +92,8 @@ class ExperimentState:
         }
         if self.aggregates is not None:
             out["aggregates"] = self.aggregates
+        if self.compute_origin is not None:
+            out["computeOrigin"] = self.compute_origin
         return out
 
 
@@ -332,10 +342,20 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 )
             )
         experiment_id = uuid.uuid4().hex
+        compute_origin: dict[str, Any] | None = None
+        try:
+            profile = client.get("/api/me/profile")
+            origin = profile.get("computeOrigin") if isinstance(profile, dict) else None
+            if isinstance(origin, dict):
+                compute_origin = origin
+        except (McpToolError, SetupRequired):
+            # Best-effort provenance stamp; never block experiment.start on profile blips.
+            pass
         state = ExperimentState(
             experiment_id=experiment_id,
             runs=prepared,
             max_in_flight=max(1, min(max_concurrent, MAX_IN_FLIGHT)),
+            compute_origin=compute_origin,
         )
         # Scope the registry entry to the calling credential BEFORE
         # registering/spawning: the fingerprint must be captured here, inside

@@ -126,6 +126,25 @@ def test_x_nimbus_token_bearer_prefix_not_double_prefixed_on_wire() -> None:
     assert seen == ["Bearer nimb_x"]
 
 
+def test_post_forwards_allow_422_to_the_token_client() -> None:
+    """Hosted protocol.validate passes allow_422. The wrapper must forward it
+    so a 422 verdict is returned instead of TypeError (NIMBUS-MCP-3)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.method == "POST"
+        assert req.url.path == "/api/protocols/validate"
+        return httpx.Response(422, json={"valid": False, "errors": [{"msg": "bad"}]})
+
+    proxy = HeaderCredentialClient(
+        _config(),
+        client_factory=lambda cfg: NimbusClient(cfg, transport=httpx.MockTransport(handler)),
+        headers_getter=lambda: {"x-nimbus-token": "nimb_validate"},
+    )
+    assert proxy.post(
+        "/api/protocols/validate", json={"spec": {}}, allow_422=True
+    ) == {"valid": False, "errors": [{"msg": "bad"}]}
+
+
 def test_x_nimbus_token_bearer_only_value_is_no_credential() -> None:
     """`Bearer ` with nothing after it is not a credential — headerless
     guidance applies, and the env fallback (if any) wins."""

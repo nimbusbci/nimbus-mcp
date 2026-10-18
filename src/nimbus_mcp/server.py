@@ -79,7 +79,7 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
    worker; hosted web app: ephemeral cloud sandbox with optional per-run pip
    requirements); leaderboard.submit scores a model class server-side (LOSO).
 8) Foundation-model lane: foundation_features(backbone=reve|labram|eegpt|cbramod|
-   biot|steegformer|codebrain|stub) — 7 pretrained EEG backbones; frozen embeddings
+   biot|steegformer|codebrain) — 7 pretrained EEG backbones; frozen embeddings
    feed any head. foundation.compare(source/dataset/subject) runs EVERY backbone on
    YOUR data once (frozen embed + LDA 5-fold CV) and returns a ranked chart with
    CIs, params, and wall time — pick the backbone by measurement, not vibes. See

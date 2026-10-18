@@ -19,17 +19,29 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         execution_ids: list[str],
         chance: float | None = None,
     ) -> dict[str, Any]:
-        """Cluster-aware group statistics across executions: pools the
-        per-subject (per-group) accuracies each run's evaluation plan stored,
-        then reports the between-group summary — mean accuracy with a t-interval
-        and a one-sample t-test vs chance. Use this instead of eyeballing
-        pooled accuracy: trials within a subject are not independent, so this
-        is the MOABB-style number that survives review.
+        """Cluster-aware group statistics across executions.
+
+        REQUIREMENT (read first): each execution must have been run with an
+        evaluation plan that STORED per-group (per-subject) accuracies for at
+        least 3 groups — e.g. leave-one-subject-out (LOSO) or grouped CV over
+        >= 3 subjects. A plain single-subject CV run (trials split within one
+        subject, one group) stores no group stats and CANNOT be analysed here.
+        If none of the given executions qualifies, the backend fails with
+        ``nimbus.stats.insufficient_groups`` — that error means exactly this:
+        re-run with a multi-subject / group-wise evaluation plan (>= 3 groups),
+        or pass runs from such a sweep.
+
+        What it does: pools the per-subject (per-group) accuracies each run's
+        evaluation plan stored, then reports the between-group summary — mean
+        accuracy with a t-interval and a one-sample t-test vs chance. Use this
+        instead of eyeballing pooled accuracy: trials within a subject are not
+        independent, so this is the MOABB-style number that survives review.
 
         Args:
             execution_ids: 1–25 executions (from execution.run) to pool. Runs
                 without stored group stats (fewer than 3 groups) are reported
-                with nulls but do not fail the request.
+                with nulls but do not fail the request — unless NONE of them
+                has group stats (then ``nimbus.stats.insufficient_groups``).
             chance: Chance level in [0, 1]; default 1/nClasses per execution.
         """
         if not execution_ids:

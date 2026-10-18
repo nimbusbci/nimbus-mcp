@@ -7,7 +7,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
-from ._annotations import MUTATING, READ_ONLY
+from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
 from ._guards import safe_segment
 from .run import synth_layout
 
@@ -110,4 +110,30 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "subject": payload.get("subject"),
             "revision": payload.get("revision"),
             "train": payload.get("train"),
+        }
+
+    @mcp.tool(name="project.delete", annotations=DESTRUCTIVE)
+    def delete_project(project_id: str, confirm: bool = False) -> dict[str, Any]:
+        """Delete a project (and its saved pipeline document) from the studio workspace.
+
+        Requires confirm=True: this removes the project from the user's project
+        list. Executions already run from it are not affected. Find ids with
+        project.list.
+
+        Args:
+            project_id: Project to delete (from project.create/project.list).
+            confirm: MUST be true to delete — the explicit user go-ahead.
+        """
+        if not confirm:
+            return {
+                "deleted": False,
+                "message": "Refusing to delete a project: pass confirm=true to proceed. "
+                "Call project.list to check the project id first.",
+            }
+        pid = safe_segment(project_id, label="project id")
+        payload = client.delete(f"/api/projects/{pid}")
+        return {
+            "deleted": bool(payload.get("ok", True)),
+            "projectId": payload.get("id", pid),
+            "message": payload.get("message"),
         }

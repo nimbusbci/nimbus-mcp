@@ -57,6 +57,11 @@ async def test_validate_node_config_camel_case_body():
     async with Client(make_server(handler)) as c:
         await c.call_tool(
             "pipeline.validate_node",
-            {"node_type": "bandpass_filter", "config": {"lowCut": 8}},
+            {
+                "node_type": "bandpass_filter",
+                "config": {"lowCut": 8},
+                "dataset": "BNCI2014_001",
+            },
         )
     assert b'"nodeType"' in seen["body"] and b'"lowCut"' in seen["body"]
+    assert b'"dataset"' in seen["body"] and b"BNCI2014_001" in seen["body"]

@@ -9,9 +9,10 @@ Backend contracts (verified against nimbus_backend):
 - POST /api/pause-calibration / /api/resume-calibration take ``{"executionId"}``.
 - GET /api/calibration-live/{id}: raw engine phases while running, ``complete``
   + ``calibration {uploadId, path, filename, format}`` once terminal.
-- The MI default train template is ``mi_headband_csp_lda`` (the app catalog
-  pairs it with ``mi_hardware_calibration``; its first node is a
-  ``custom_data`` node pinning the latest calibration run).
+- The default train templates are ``mi_headband_csp_lda`` (mi) and
+  ``p300_hardware_xdawn_lda`` (p300) — the app catalog pairs them with the
+  hardware calibration templates; their first node is a ``custom_data`` node
+  pinning the latest calibration run.
 """
 
 from __future__ import annotations
@@ -38,6 +39,19 @@ PARADIGM_TEMPLATES = {
 # source pins the latest calibration run — calibration.train only swaps the
 # source ref for the pinned upload.
 MI_DEFAULT_TRAIN_TEMPLATE = "mi_headband_csp_lda"
+
+# Verified against nimbus_backend/storage/templates/p300/
+# p300_hardware_xdawn_lda.yaml: first node (id "data") is a custom_data node
+# whose source pins the latest calibration run — same rewirable shape as mi.
+# sart/target_hit have NO train templates anywhere (their calibration
+# templates ship empty train: sections), so they are absent from the map and
+# keep the explicit template_id requirement.
+P300_DEFAULT_TRAIN_TEMPLATE = "p300_hardware_xdawn_lda"
+
+_DEFAULT_TRAIN_TEMPLATE_BY_PARADIGM = {
+    "mi": MI_DEFAULT_TRAIN_TEMPLATE,
+    "p300": P300_DEFAULT_TRAIN_TEMPLATE,
+}
 
 _DEFAULT_SAMPLING_RATE = 250
 
@@ -256,13 +270,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                     "to train the subject's classifier."
                 )
             else:
-                # Completed without a resolvable recording (none linked, or a
-                # desktop-local backend whose uploads the API can't resolve) —
-                # do NOT point at train; it needs the uploadId.
+                # Completed without a resolvable recording (nothing linked, or
+                # a desktop-local recording made before uploads gained
+                # execution linkage) — do NOT point at train; it needs the
+                # uploadId.
                 out["nextHint"] = (
-                    "Calibration complete, but no recording is available from this "
-                    "backend — rerun calibration.start on a Postgres-backed backend "
-                    "to get a trainable recording."
+                    "Calibration complete, but no recording is available for this "
+                    "run (recordings made before the desktop execution-linkage "
+                    "build can't be resolved) — rerun calibration.start to get a "
+                    "trainable recording."
                 )
         return out
 
@@ -298,16 +314,17 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         (NON-BLOCKING). Fetches the recorded upload, wires it into a train
         pipeline as a custom_data source, and starts the run. Requires a Pro
         plan (custom_data training is freemium-gated). The calibrate→train
-        handoff requires a Postgres-backed backend (hosted or local dev); a
-        desktop-local session completes and records, but its upload can't be
-        resolved by MCP train today.
+        handoff resolves on every backend, desktop-local included; only
+        recordings made before the desktop execution-linkage build resolve
+        no upload — rerun calibration.start for those.
 
         Args:
             execution_id: The COMPLETED calibration run (from calibration.start).
             paradigm: Paradigm of the recording (mi | p300 | sart | target_hit);
-                only mi has a default train template.
+                mi and p300 have default train templates.
             template_id: Train template to use (e.g. from catalog.templates);
-                required for non-mi paradigms (mi defaults to mi_headband_csp_lda).
+                required for sart/target_hit (mi defaults to mi_headband_csp_lda,
+                p300 to p300_hardware_xdawn_lda).
             train_graph: Explicit train graph instead of a template; its first
                 data node (custom_data/public_data) is rewired onto the recording.
             name: Display name recorded on the training run.
@@ -317,11 +334,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             raise McpToolError(
                 f"Unknown paradigm '{paradigm}'. Valid: {sorted(PARADIGM_TEMPLATES)}."
             )
-        if train_graph is None and template_id is None and paradigm != "mi":
+        has_default = paradigm in _DEFAULT_TRAIN_TEMPLATE_BY_PARADIGM
+        if train_graph is None and template_id is None and not has_default:
             raise McpToolError(
                 f"No default train template for paradigm '{paradigm}' — pass an explicit "
-                f"template_id (from catalog.templates). Only mi has one "
-                f"({MI_DEFAULT_TRAIN_TEMPLATE})."
+                f"template_id (from catalog.templates). Only mi "
+                f"({MI_DEFAULT_TRAIN_TEMPLATE}) and p300 "
+                f"({P300_DEFAULT_TRAIN_TEMPLATE}) have one."
             )
         live = client.get(f"/api/calibration-live/{exec_id}")
         if live.get("phase") != "complete":
@@ -356,7 +375,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             graph = json.loads(json.dumps(train_graph))
             layout: dict[str, Any] = synth_layout(graph)
         else:
-            tid = template_id if template_id is not None else MI_DEFAULT_TRAIN_TEMPLATE
+            tid = (
+                template_id
+                if template_id is not None
+                else _DEFAULT_TRAIN_TEMPLATE_BY_PARADIGM[paradigm]
+            )
             template = _fetch_template(client, tid)
             graph = _graph_section(template, "train", tid)
             # Train snapshots carry their canvas layout at the top level.
