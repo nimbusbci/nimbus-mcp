@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import httpx
+import pytest
 from fastmcp import Client, FastMCP
 
 from nimbus_mcp.client import NimbusClient
@@ -315,3 +316,57 @@ async def test_mine_lists_submissions():
     assert seen["path"] == "/api/leaderboard/submissions"
     # List order passes through untouched (newest first, server-side).
     assert [s["submissionId"] for s in result.data["submissions"]] == ["sub-2", "sub-1"]
+
+
+def _board_with_tracks() -> dict:
+    import copy
+
+    board = copy.deepcopy(LEADERBOARD)
+    board["crossSubject"] = {
+        "datasets": [
+            {"datasetId": "BNCI2014_001", "rows": [{"pipelineId": "loso"}]},
+            {"datasetId": "BNCI2014_008", "rows": [{"pipelineId": "p300"}]},
+        ]
+    }
+    board["pretrainedFewTrial"] = {
+        "datasets": [{"datasetId": "BNCI2014_001", "rows": [{"pipelineId": "reve"}]}]
+    }
+    board["submittableDatasets"] = ["BNCI2014_001", "BNCI2015_004"]
+    return board
+
+
+async def test_get_leaderboard_filters_every_track():
+    board = _board_with_tracks()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=board)
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool("catalog.leaderboard", {"dataset_id": "BNCI2014_001"})
+
+    data = result.data
+    assert [d["datasetId"] for d in data["datasets"]] == ["BNCI2014_001"]
+    assert [d["datasetId"] for d in data["crossSubject"]["datasets"]] == ["BNCI2014_001"]
+    assert [d["datasetId"] for d in data["pretrainedFewTrial"]["datasets"]] == ["BNCI2014_001"]
+    assert data["submittableDatasets"] == ["BNCI2014_001", "BNCI2015_004"]
+
+
+async def test_get_leaderboard_unknown_dataset_names_the_board():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=LEADERBOARD)
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="BNCI2014_001"):
+            await c.call_tool("catalog.leaderboard", {"dataset_id": "BNCI2014_999"})
+
+
+async def test_submit_without_code_or_backbone_does_not_post():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("empty submit must not reach the API")
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="submittableDatasets"):
+            await c.call_tool(
+                "leaderboard.submit",
+                {"dataset_id": "BNCI2014_008", "name": "empty"},
+            )

@@ -6,13 +6,74 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from ..client import NimbusClient
+from ..client import McpToolError, NimbusClient
 from ._annotations import MUTATING, READ_ONLY
+
+_TRACK_KEYS = ("crossSubject", "pretrainedFewTrial")
+
+
+def _known_dataset_ids(payload: dict[str, Any]) -> list[str]:
+    seen: list[str] = []
+
+    def add(rows: object) -> None:
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            dataset_id = row.get("datasetId")
+            if dataset_id and str(dataset_id) not in seen:
+                seen.append(str(dataset_id))
+
+    add(payload.get("datasets"))
+    for key in _TRACK_KEYS:
+        block = payload.get(key)
+        if isinstance(block, dict):
+            add(block.get("datasets"))
+    return seen
+
+
+def _filter_leaderboard(payload: dict[str, Any], dataset_id: str) -> dict[str, Any]:
+    """Keep one dataset's rows on every track. Unknown ids name the board."""
+    known = _known_dataset_ids(payload)
+    matched = False
+
+    def keep(rows: object) -> list[Any]:
+        nonlocal matched
+        if not isinstance(rows, list):
+            return []
+        kept = [
+            row
+            for row in rows
+            if isinstance(row, dict) and str(row.get("datasetId")) == dataset_id
+        ]
+        if kept:
+            matched = True
+        return kept
+
+    out = dict(payload)
+    if isinstance(out.get("datasets"), list):
+        out["datasets"] = keep(out["datasets"])
+    for key in _TRACK_KEYS:
+        block = out.get(key)
+        if isinstance(block, dict):
+            block = dict(block)
+            if isinstance(block.get("datasets"), list):
+                block["datasets"] = keep(block["datasets"])
+            out[key] = block
+    if matched:
+        return out
+    close = next((name for name in known if name.lower() == dataset_id.lower()), None)
+    hint = f" Did you mean {close}?" if close else ""
+    listed = ", ".join(known) if known else "(none on this board)"
+    raise McpToolError(
+        f"No leaderboard rows for dataset {dataset_id!r}.{hint} Known dataset ids: {listed}."
+    )
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
     @mcp.tool(name="catalog.leaderboard", annotations=READ_ONLY)
-    def get_leaderboard() -> dict[str, Any]:
+    def get_leaderboard(dataset_id: str | None = None) -> dict[str, Any]:
         """Public benchmark leaderboard: pipeline rankings per dataset.
 
         Two tracks: the top-level ``within_session`` block (curated suite
@@ -22,13 +83,25 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         sort desc by ``meanAccuracyPct`` (95% CI in ``ciLoPct``/``ciHiPct``).
         ``packFingerprint`` identifies the exact dataset pack behind the
         scores; ``updated`` marks each dataset's most recent run. The
-        ``pretrained_few_trial`` efficiency track means: accuracy at a
+        ``pretrainedFewTrial`` efficiency track means: accuracy at a
         protocol-fixed 100-trials-per-subject budget — the frozen-backbone /
         few-parameter rows that matter when calibration data is scarce
         (``paramsTrained`` shown per row so cost is readable next to
-        accuracy).
+        accuracy). ``submittableDatasets`` is the set open for
+        ``leaderboard.submit``; a dataset can appear under ``crossSubject``
+        and still be closed for new submissions.
+
+        Args:
+            dataset_id: Optional dataset id. When set, every track is filtered
+                to that dataset. Omit it for the full board.
         """
-        return client.get("/api/leaderboard")
+        payload = client.get("/api/leaderboard")
+        if not isinstance(payload, dict):
+            return payload
+        wanted = (dataset_id or "").strip()
+        if not wanted:
+            return payload
+        return _filter_leaderboard(payload, wanted)
 
     @mcp.tool(name="leaderboard.submit", annotations=MUTATING)
     def submit_leaderboard_model(
@@ -53,12 +126,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         (``deduplicated: true``).
 
         Args:
-            dataset_id: Open dataset id (see catalog.leaderboard crossSubject
-                datasets, e.g. "BNCI2014_001").
+            dataset_id: A dataset id from catalog.leaderboard
+                ``submittableDatasets`` (e.g. "BNCI2014_001"). A dataset can
+                appear under crossSubject and still be closed for submission
+                (BNCI2014_008 is scored there and is not in the open set).
             name: Display name on the board (<=100 chars).
             code: Python source defining a class with fit(X, y, info) and
                 predict(X) (<=256KB; validate first with python.validate).
-                Omit when declaring a backbone instead.
+                Required unless backbone_repo is set.
             class_name: Contract class to instantiate; omit to auto-detect.
             requirements: Optional PyPI requirements (e.g. ["sklearn>=1.4"]).
             track: "cross_subject" (default — full-data leave-one-subject-out,
@@ -80,6 +155,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 and scores frozen-embeddings → linear probe server-side. When
                 backbone_repo is set, omit code.
         """
+        has_code = bool(code and code.strip())
+        has_backbone = bool(backbone_repo and str(backbone_repo).strip())
+        if not has_code and not has_backbone:
+            raise McpToolError(
+                "leaderboard.submit needs model code, or a backbone declaration "
+                "(backbone_repo, backbone_kind, backbone_revision, and "
+                "backbone_license on the pretrained_few_trial track). "
+                "dataset_id and name alone are not a submission. Only datasets "
+                "listed in catalog.leaderboard submittableDatasets can be "
+                "submitted; a dataset can be scored on crossSubject and still "
+                "be closed for new submissions."
+            )
         body: dict[str, Any] = {
             "datasetId": dataset_id,
             "name": name,

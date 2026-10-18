@@ -85,7 +85,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
 
         Args:
             execution_id: Run to plot (from execution.run / execution.results).
-            matrix: "eval" (held-out, default) or "train" (fit-set sanity check).
+            matrix: "eval" (held-out, default) or "train" (fit-set / cross-validation).
+                CV and evaluation-plan runs often have no eval matrix — use "train".
             save: Also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return its path.
         """
         exec_id = safe_segment(execution_id)
