@@ -35,66 +35,24 @@ async def test_create_project_posts_name():
     assert r.data["projectId"] == "p1"
 
 
-async def test_save_pipeline_reads_revision_then_puts_with_layout():
-    calls = []
+async def test_save_pipeline_requires_expected_revision():
+    """Omitting expected_revision must fail closed — never blind-overwrite (#468)."""
 
     def handler(req: httpx.Request) -> httpx.Response:
-        calls.append((req.method, req.url.path))
-        if req.method == "GET" and req.url.path.endswith("/doc"):
-            return httpx.Response(
-                200,
-                json={"ok": True, "projectId": "p1", "train": TRAIN, "revision": 7, "name": "old"},
-            )
-        if req.method == "PUT" and req.url.path.endswith("/doc"):
-            body = req.read()
-            assert b'"expectedRevision"' in body and b'"layout"' in body
-            return httpx.Response(
-                200, json={"ok": True, "projectId": "p1", "revision": 8, "message": "saved"}
-            )
-        raise AssertionError((req.method, req.url.path))
+        raise AssertionError("must not call the API without expected_revision")
 
     async with Client(make_server(handler)) as c:
-        r = await c.call_tool(
-            "project.save", {"project_id": "p1", "train_graph": TRAIN, "name": "mi"}
-        )
-    assert r.data["revision"] == 8
-    assert ("GET", "/api/projects/p1/doc") in calls
-    assert ("PUT", "/api/projects/p1/doc") in calls
+        with pytest.raises(Exception, match="expected_revision"):
+            await c.call_tool(
+                "project.save", {"project_id": "p1", "train_graph": TRAIN, "name": "mi"}
+            )
 
 
-async def test_save_pipeline_retries_once_on_409():
-    puts = []
+async def test_save_pipeline_409_surfaces_conflict_without_overwrite_retry():
+    """A 409 must surface immediately — never re-GET and force-overwrite (#468)."""
+    puts, put_bodies = [], []
 
     def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "GET" and req.url.path.endswith("/doc"):
-            return httpx.Response(
-                200, json={"ok": True, "projectId": "p1", "train": TRAIN, "revision": 1}
-            )
-        if req.method == "PUT" and req.url.path.endswith("/doc"):
-            puts.append(1)
-            if len(puts) == 1:
-                return httpx.Response(
-                    409, json={"code": "nimbus.project.doc_conflict", "detail": "stale"}
-                )
-            return httpx.Response(200, json={"ok": True, "projectId": "p1", "revision": 2})
-        raise AssertionError(req.url.path)
-
-    async with Client(make_server(handler)) as c:
-        r = await c.call_tool("project.save", {"project_id": "p1", "train_graph": TRAIN})
-    assert len(puts) == 2 and r.data["revision"] == 2
-
-
-async def test_save_pipeline_second_409_surfaces_conflict_error():
-    """A 409 that survives the single retry must surface as a tool error that
-    names the backend conflict code, not silently return a failed payload."""
-    puts, gets, put_bodies = [], [], []
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.method == "GET" and req.url.path.endswith("/doc"):
-            gets.append(1)
-            return httpx.Response(
-                200, json={"ok": True, "projectId": "p1", "train": TRAIN, "revision": len(gets)}
-            )
         if req.method == "PUT" and req.url.path.endswith("/doc"):
             puts.append(1)
             put_bodies.append(json.loads(req.read()))
@@ -110,11 +68,59 @@ async def test_save_pipeline_second_409_surfaces_conflict_error():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="nimbus.project.doc_conflict"):
-            await c.call_tool("project.save", {"project_id": "p1", "train_graph": TRAIN})
-    # one initial read + one re-read for the retry; two PUTs, the second
-    # carrying the freshly re-read revision.
-    assert len(gets) == 2 and len(puts) == 2
-    assert put_bodies[1]["expectedRevision"] == 2
+            await c.call_tool(
+                "project.save",
+                {"project_id": "p1", "train_graph": TRAIN, "expected_revision": 1},
+            )
+    assert len(puts) == 1
+    assert put_bodies[0]["expectedRevision"] == 1
+
+
+async def test_save_pipeline_uses_caller_expected_revision_without_get():
+    put_bodies = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            raise AssertionError("must not GET when expected_revision is provided")
+        if req.method == "PUT" and req.url.path.endswith("/doc"):
+            put_bodies.append(json.loads(req.read()))
+            return httpx.Response(
+                200, json={"ok": True, "projectId": "p1", "revision": 4, "message": "saved"}
+            )
+        raise AssertionError((req.method, req.url.path))
+
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool(
+            "project.save",
+            {
+                "project_id": "p1",
+                "train_graph": TRAIN,
+                "expected_revision": 3,
+                "subject": "S03",
+            },
+        )
+    assert r.data["revision"] == 4
+    assert put_bodies[0]["expectedRevision"] == 3
+    assert put_bodies[0]["subject"] == "S03"
+
+
+async def test_save_pipeline_stale_expected_revision_conflicts():
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "PUT" and req.url.path.endswith("/doc"):
+            body = json.loads(req.read())
+            assert body["expectedRevision"] == 2
+            return httpx.Response(
+                409,
+                json={"code": "nimbus.project.doc_conflict", "detail": "stale"},
+            )
+        raise AssertionError((req.method, req.url.path))
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="expected revision 2 is stale"):
+            await c.call_tool(
+                "project.save",
+                {"project_id": "p1", "train_graph": TRAIN, "expected_revision": 2},
+            )
 
 
 async def test_load_pipeline_returns_train_graph():

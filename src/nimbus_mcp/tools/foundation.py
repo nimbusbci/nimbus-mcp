@@ -9,11 +9,13 @@ measured on other people's data.
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
+from mcp.types import TextContent
 
 from ..client import McpToolError, NimbusClient
 from ._annotations import FIGURE_OUTPUT_SCHEMA, READ_ONLY
@@ -35,9 +37,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Backbones that can't process your data (window size, channel count) are
         noted, not silently skipped. Each backbone embeds your
         trials frozen (the exact foundation_features preprocessing), a LDA is
-        cross-validated on the embeddings, and meta.results carries the
-        per-backbone accuracy, CI, embed dim, params, and time — pick the
-        foundation_features backbone by measurement, not vibes.
+        cross-validated on the embeddings. Returns a PNG image PLUS a JSON text
+        block (and structuredContent.meta.results) with per-backbone accuracy,
+        CI, embed dim, params, and time — pick the foundation_features backbone
+        by measurement, not vibes.
 
         Args:
             source: "dataset" (MOABB pack), "upload" (path from data.upload), or
@@ -66,12 +69,30 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             png = base64.b64decode(image_b64, validate=True)
         except (ValueError, TypeError) as e:
             raise McpToolError(f"Backend figure payload was not valid base64 PNG: {e}") from e
+        meta = dict(payload.get("meta") or {})
         info: dict[str, Any] = {
             "ok": True,
             "title": payload.get("title"),
             "mimeType": payload.get("mimeType", "image/png"),
-            "meta": dict(payload.get("meta") or {}),
+            "meta": meta,
         }
-        # Image as content block; sidecar as structuredContent typed by
-        # FIGURE_OUTPUT_SCHEMA.
-        return ToolResult(content=[Image(data=png, format="png")], structured_content=info)
+        # Image + machine-readable text (clients that ignore structuredContent
+        # still get meta.results as JSON — #471) + structuredContent sidecar.
+        results_text = json.dumps(
+            {
+                "title": info.get("title"),
+                "results": meta.get("results"),
+                "best": meta.get("best"),
+                "skipped": meta.get("skipped"),
+            },
+            default=str,
+        )
+        # Text first so clients that only surface the first content block still
+        # get machine-readable numbers alongside the chart (#471).
+        return ToolResult(
+            content=[
+                TextContent(type="text", text=results_text),
+                Image(data=png, format="png"),
+            ],
+            structured_content=info,
+        )

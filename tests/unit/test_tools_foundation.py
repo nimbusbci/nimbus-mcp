@@ -78,6 +78,11 @@ async def test_compare_returns_image_and_results_meta(tmp_path):
     assert info["meta"]["best"]["name"] == "cbramod"
     assert info["meta"]["results"][0]["backbone"] == "cbramod"
     assert info["meta"]["skipped"][0]["name"] == "labram"
+    # Clients that ignore structuredContent still get results as text (#471).
+    texts = [b for b in result.content if isinstance(b, TextContent)]
+    assert texts
+    text_payload = json.loads(texts[0].text)
+    assert text_payload["results"][0]["backbone"] == "cbramod"
 
 
 async def test_compare_forwards_upload_and_local_sources(tmp_path):
@@ -124,3 +129,5 @@ async def test_compare_is_read_only_and_documented(tmp_path):
     assert "which wins" in tool.description
     assert "noted, not silently skipped" in tool.description
     assert "CI whiskers" in tool.description
+    assert "JSON text" in tool.description
+    assert "meta.results" in tool.description

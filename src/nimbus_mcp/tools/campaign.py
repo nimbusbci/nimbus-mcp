@@ -10,11 +10,15 @@ trimmed metrics over the completed runs.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import threading
 import time
 import uuid
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import Path
 from statistics import fmean, pstdev
 from typing import Any
 
@@ -25,6 +29,8 @@ from ..setup_mode import SetupRequired
 from ._annotations import MUTATING, READ_ONLY
 from ._guards import safe_segment
 from .run import _METRIC_KEYS, synth_layout
+
+logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SEC = 5.0
 QUEUE_FULL_BACKOFF_SEC = 5.0
@@ -84,6 +90,7 @@ class ExperimentState:
                 row["error"] = run.error
             if run.metrics is not None:
                 row["metrics"] = run.metrics
+                row["evaluationKind"] = _infer_evaluation_kind(run)
             rows.append(row)
         out: dict[str, Any] = {
             "experimentId": self.experiment_id,
@@ -97,19 +104,60 @@ class ExperimentState:
         return out
 
 
+def _experiment_disk_dir(fingerprint: str) -> Path:
+    """Per-credential durable store under ``~/.nimbus/experiments/<hash>/``.
+
+    Does not create the directory — callers that write must mkdir inside their
+    own OSError-tolerant path so a read-only / sandboxed home cannot abort
+    experiment.run (#476).
+    """
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:24]
+    return Path.home() / ".nimbus" / "experiments" / digest
+
+
+def _persist_experiment_payload(fingerprint: str, payload: dict[str, Any]) -> None:
+    """Write a terminal (or in-progress) snapshot so experiment.get survives
+    process restart on the same machine (#476)."""
+    exp_id = payload.get("experimentId")
+    if not isinstance(exp_id, str) or not exp_id:
+        return
+    directory = _experiment_disk_dir(fingerprint)
+    path = directory / f"{exp_id}.json"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError as err:
+        logger.warning("Could not persist experiment %s: %s", exp_id, err)
+
+
+def _load_experiment_payload(fingerprint: str, experiment_id: str) -> dict[str, Any] | None:
+    path = _experiment_disk_dir(fingerprint) / f"{experiment_id}.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 class Experiments:
-    """Thread-safe process-local registry of experiment states.
+    """Thread-safe registry of experiment states (memory + on-disk fallback).
 
     Entries are keyed by ``"<credential fingerprint>:<experiment_id>"``: the
     registry lives in one process, and a hosted gateway authenticates many
     users per process — keying by the bare id would let any authenticated
     gateway user read another user's experiment snapshot by id. The scoping
     is internal: experiment.run still returns the plain experiment_id, and
-    experiment.get recomputes the caller's key from its own credential."""
+    experiment.get recomputes the caller's key from its own credential.
+
+    Terminal snapshots are also written under ``~/.nimbus/experiments/`` so a
+    fresh MCP process on the same host can still answer experiment.get (#476).
+    """
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self._states: dict[str, ExperimentState] = {}
+        self._fingerprints: dict[str, str] = {}
 
     @staticmethod
     def key(fingerprint: str, experiment_id: str) -> str:
@@ -117,8 +165,15 @@ class Experiments:
 
     def add(self, state: ExperimentState, fingerprint: str) -> None:
         with self.lock:
-            self._states[self.key(fingerprint, state.experiment_id)] = state
+            key = self.key(fingerprint, state.experiment_id)
+            self._states[key] = state
+            self._fingerprints[key] = fingerprint
             self._evict_locked()
+        _persist_experiment_payload(fingerprint, state.payload())
+
+    def persist(self, fingerprint: str, state: ExperimentState) -> None:
+        """Flush the current payload to disk (call after aggregates finalize)."""
+        _persist_experiment_payload(fingerprint, state.payload())
 
     def _evict_locked(self) -> None:
         """Drop the oldest terminal experiments while over MAX_EXPERIMENTS
@@ -126,7 +181,8 @@ class Experiments:
         re-read via experiment.get — pollers hold the id and learn the result
         before their experiment leaves the running workers' hands; the cap is
         generous (64), so eviction only bites a long-lived gateway process.
-        Called with the lock held."""
+        Called with the lock held. Disk snapshots are kept so a later get can
+        still recover the payload."""
         if len(self._states) <= MAX_EXPERIMENTS:
             return
         for key, state in list(self._states.items()):
@@ -134,11 +190,15 @@ class Experiments:
                 break
             if state.status in _TERMINAL:
                 del self._states[key]
+                self._fingerprints.pop(key, None)
 
     def snapshot(self, fingerprint: str, experiment_id: str) -> dict[str, Any] | None:
+        """Return the raw payload; ``experiment.get`` runs kind backfill with client."""
         with self.lock:
             state = self._states.get(self.key(fingerprint, experiment_id))
-            return None if state is None else state.payload()
+            if state is not None:
+                return state.payload()
+        return _load_experiment_payload(fingerprint, experiment_id)
 
 
 EXPERIMENTS = Experiments()
@@ -251,9 +311,394 @@ def _drive(state: ExperimentState, client: NimbusClient) -> None:
                 del in_flight[exec_id]
 
 
+def _evaluation_method_from_graph(train_graph: dict[str, Any]) -> str | None:
+    """Return the evaluation_plan ``method`` from a run graph, if present."""
+    nodes = train_graph.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("type") or "") != "evaluation_plan":
+            continue
+        cfg = node.get("config")
+        if not isinstance(cfg, dict):
+            return None
+        method = cfg.get("method")
+        return str(method).strip().lower() if method not in (None, "") else None
+    return None
+
+
+def _public_data_subject_count(train_graph: dict[str, Any]) -> int | None:
+    """Count of subjects listed on the first public_data node, if any."""
+    nodes = train_graph.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    for node in nodes:
+        if not isinstance(node, dict) or str(node.get("type") or "") != "public_data":
+            continue
+        cfg = node.get("config")
+        if not isinstance(cfg, dict):
+            return None
+        raw = str(cfg.get("subject") or "")
+        parts = [s.strip() for s in raw.split(",") if s.strip()]
+        return len(parts) if parts else None
+    return None
+
+
+_KIND_ORDER = ("per_subject", "within_session", "loso", "losco", "pretrained_few_trial")
+
+
+def _infer_evaluation_kind(run: RunRow) -> str:
+    """Classify a completed run for aggregate kind labelling (#470).
+
+    Prefers the evaluation_plan method on the posted graph. Single-subject
+    within-session / k-fold runs are labelled ``per_subject`` so a mixed
+    campaign's ``kindBreakdown`` separates them from LOSO. Falls back to
+    metrics: ``nGroups`` marks a multi-subject / LOSO-style grouped run.
+    """
+    method = _evaluation_method_from_graph(run.train_graph)
+    n_subjects = _public_data_subject_count(run.train_graph)
+    if method == "loso":
+        return "loso"
+    if method == "losco":
+        return "losco"
+    if method == "pretrained_few_trial":
+        return "pretrained_few_trial"
+    if method == "within_session":
+        if n_subjects is not None and n_subjects >= 2:
+            return "within_session"
+        return "per_subject"
+    if method in {"kfold", "stratified_kfold"}:
+        metrics = run.metrics or {}
+        if metrics.get("nGroups") is not None or (n_subjects is not None and n_subjects >= 2):
+            return "grouped"
+        return "per_subject"
+    metrics = run.metrics or {}
+    if metrics.get("nGroups") is not None:
+        return "loso"
+    return "per_subject"
+
+
+def _headline_accuracy_pct(metrics: dict[str, Any] | None) -> float | None:
+    """Prefer ``accuracyPct``, then ``evalAccuracyPct``, for kind-mean labelling."""
+    if not isinstance(metrics, dict):
+        return None
+    for key in ("accuracyPct", "evalAccuracyPct"):
+        value = metrics.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return None
+
+
+def _coerce_n_groups(raw: Any) -> int | None:
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return int(raw)
+    return None
+
+
+def _group_kind_from_cv_grouping(cv: str) -> str | None:
+    """Mirror backend ``plots._resolve_group_kind`` cvGrouping fallback."""
+    if cv.startswith("subject-session") or cv == "session" or cv.startswith("session"):
+        return "session"
+    if cv.startswith("subject"):
+        return "subject"
+    return None
+
+
+def _infer_kind_from_signals(
+    method: str | None,
+    n_groups: int | None,
+    group_kind: str | None,
+) -> str:
+    """Classify using the same priority as backend ``_infer_execution_evaluation_kind``.
+
+    Method wins (within_session → per_subject unless subject-grouped;
+    loso → loso). Bare ``nGroups`` alone must NOT imply loso — per-subject
+    within-session / k-fold runs also stamp nGroups (live #470 fail: all four
+    runs classified loso because each carried nGroups=5).
+    """
+    meth = (method or "").strip().lower() or None
+    if meth == "loso":
+        return "loso"
+    if meth == "losco":
+        return "losco"
+    if meth == "pretrained_few_trial":
+        return "pretrained_few_trial"
+    if meth == "within_session":
+        if n_groups is not None and n_groups >= 2 and group_kind == "subject":
+            return "within_session"
+        return "per_subject"
+    if meth in {"kfold", "stratified_kfold"}:
+        if n_groups is not None and n_groups >= 2 and group_kind == "subject":
+            return "grouped"
+        return "per_subject"
+    # No evaluation-plan method: use groupKind / cvGrouping-derived kind.
+    # Session-level groups → per_subject. Subject-level groups with nGroups →
+    # loso (multi-subject / LOSO-style). Never treat nGroups alone as loso.
+    if group_kind == "session":
+        return "per_subject"
+    if group_kind == "subject" and n_groups is not None and n_groups >= 2:
+        return "loso"
+    return "per_subject"
+
+
+def _kind_signals_from_payload_run(
+    run: dict[str, Any],
+) -> tuple[str | None, int | None, str | None]:
+    """Extract (method, n_groups, group_kind) from a serialized run row."""
+    metrics = run.get("metrics") if isinstance(run.get("metrics"), dict) else {}
+    method_raw = (
+        run.get("evaluationMethod")
+        or metrics.get("evaluationMethod")
+        or metrics.get("method")
+    )
+    method = (
+        str(method_raw).strip().lower()
+        if method_raw not in (None, "")
+        else None
+    )
+    n_groups = _coerce_n_groups(metrics.get("nGroups") if metrics else None)
+    group_kind_raw = run.get("groupKind") or metrics.get("groupKind")
+    group_kind = (
+        str(group_kind_raw).strip().lower()
+        if isinstance(group_kind_raw, str) and group_kind_raw.strip()
+        else None
+    )
+    if group_kind not in ("subject", "session"):
+        group_kind = None
+    if group_kind is None:
+        cv_raw = run.get("cvGrouping") or metrics.get("cvGrouping") or ""
+        group_kind = _group_kind_from_cv_grouping(str(cv_raw))
+    return method, n_groups, group_kind
+
+
+def _infer_kind_from_payload_run(run: dict[str, Any]) -> str:
+    """Classify a serialized experiment.run row (disk / payload; no train_graph).
+
+    Prefers stamped ``evaluationKind``; otherwise mirrors backend stats.grouped
+    signals (evaluation method, then groupKind/cvGrouping, never bare nGroups
+    alone as loso — #470 / 0.14.7 live fail).
+    """
+    stamped = run.get("evaluationKind")
+    if isinstance(stamped, str) and stamped.strip():
+        return stamped.strip()
+    method, n_groups, group_kind = _kind_signals_from_payload_run(run)
+    return _infer_kind_from_signals(method, n_groups, group_kind)
+
+
+def _kind_signals_from_execution_result(
+    result: dict[str, Any],
+) -> tuple[str | None, int | None, str | None]:
+    """Pull method / nGroups / groupKind off a ``GET /api/result/{id}`` body.
+
+    Same sources backend ``stats.grouped`` uses (evaluationSummary.method +
+    grouped_accuracy_stats.groupKind / cvGrouping).
+    """
+    raw_metrics = result.get("metrics")
+    metrics: dict[str, Any] = raw_metrics if isinstance(raw_metrics, dict) else {}
+    raw_results = result.get("results")
+    results: dict[str, Any] = raw_results if isinstance(raw_results, dict) else {}
+    summary = results.get("evaluationSummary")
+    method: str | None = None
+    if isinstance(summary, dict):
+        raw_method = summary.get("method")
+        if raw_method not in (None, ""):
+            method = str(raw_method).strip().lower()
+    blob: dict[str, Any] | None = None
+    for container in ("foldResults", "evaluationSummary"):
+        block = results.get(container)
+        if isinstance(block, dict):
+            grouped = block.get("grouped_accuracy_stats")
+            if isinstance(grouped, dict):
+                blob = grouped
+                break
+    group_kind: str | None = None
+    if isinstance(blob, dict) and blob.get("groupKind") in ("subject", "session"):
+        group_kind = str(blob.get("groupKind"))
+    if group_kind is None and isinstance(summary, dict):
+        group_kind = _group_kind_from_cv_grouping(str(summary.get("cvGrouping") or ""))
+    n_groups = None
+    if isinstance(blob, dict):
+        n_groups = _coerce_n_groups(blob.get("nGroups"))
+    if n_groups is None:
+        n_groups = _coerce_n_groups(metrics.get("nGroups"))
+    return method, n_groups, group_kind
+
+
+def _enrich_payload_runs_kind_signals(
+    runs: list[dict[str, Any]],
+    client: NimbusClient,
+) -> None:
+    """Best-effort: fill evaluationMethod / groupKind from backend results.
+
+    Used when legacy disk rows lack ``evaluationKind`` so classification can
+    match ``stats.grouped`` on the same execution ids. Mutates ``runs`` in place;
+    fetch failures leave the row unchanged (offline signals still apply).
+    """
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        # Only completed runs with metrics enter kindBreakdown; skip the rest
+        # so a failed mid-poll experiment.get does not poke /api/result.
+        if run.get("status") != "completed":
+            continue
+        metrics = run.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            continue
+        stamped = run.get("evaluationKind")
+        if isinstance(stamped, str) and stamped.strip():
+            continue
+        method, _n, group_kind = _kind_signals_from_payload_run(run)
+        if method is not None and (group_kind is not None or method in {"loso", "losco"}):
+            # Already have enough offline signal to classify like the backend.
+            continue
+        if method is not None and method == "within_session":
+            continue
+        exec_id = run.get("executionId")
+        if not isinstance(exec_id, str) or not exec_id:
+            continue
+        try:
+            payload = client.get(f"/api/result/{exec_id}")
+        except (McpToolError, SetupRequired):
+            # Best-effort only: an expired token mid-poll must not turn a
+            # readable disk snapshot into setup guidance (#470 backfill).
+            continue
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict):
+            continue
+        fetched_method, _fetched_n, fetched_kind = _kind_signals_from_execution_result(
+            result
+        )
+        if fetched_method and not run.get("evaluationMethod"):
+            run["evaluationMethod"] = fetched_method
+        if fetched_kind and not run.get("groupKind"):
+            run["groupKind"] = fetched_kind
+
+
+def _order_kind_breakdown(by_kind: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable kind order: per_subject first, then loso-family, then remaining alpha."""
+    ordered = [by_kind[k] for k in _KIND_ORDER if k in by_kind]
+    ordered.extend(by_kind[k] for k in sorted(by_kind) if k not in _KIND_ORDER)
+    return ordered
+
+
+def _finalize_kind_bucket(bucket: dict[str, Any], accuracies: list[float]) -> None:
+    """Attach headline accuracy mean/std; std is population, None below 2 values."""
+    bucket["mean"] = fmean(accuracies) if accuracies else None
+    bucket["std"] = pstdev(accuracies) if len(accuracies) >= 2 else None
+
+
+def _kind_breakdown_from_run_rows(completed: list[RunRow]) -> list[dict[str, Any]]:
+    """Build ``kindBreakdown`` rows (kind, n, mean, std, executionIds, runNames)."""
+    by_kind: dict[str, dict[str, Any]] = {}
+    acc_by_kind: dict[str, list[float]] = {}
+    for run in completed:
+        kind = _infer_evaluation_kind(run)
+        bucket = by_kind.setdefault(
+            kind,
+            {"kind": kind, "n": 0, "executionIds": [], "runNames": []},
+        )
+        bucket["n"] += 1
+        if run.execution_id:
+            bucket["executionIds"].append(run.execution_id)
+        bucket["runNames"].append(run.name)
+        acc = _headline_accuracy_pct(run.metrics)
+        if acc is not None:
+            acc_by_kind.setdefault(kind, []).append(acc)
+    for kind, bucket in by_kind.items():
+        _finalize_kind_bucket(bucket, acc_by_kind.get(kind, []))
+    return _order_kind_breakdown(by_kind)
+
+
+def _kind_breakdown_from_payload_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild kindBreakdown from a serialized experiment payload (#470 follow-up)."""
+    by_kind: dict[str, dict[str, Any]] = {}
+    acc_by_kind: dict[str, list[float]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        if run.get("status") != "completed":
+            continue
+        metrics = run.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            continue
+        kind = _infer_kind_from_payload_run(run)
+        bucket = by_kind.setdefault(
+            kind,
+            {"kind": kind, "n": 0, "executionIds": [], "runNames": []},
+        )
+        bucket["n"] += 1
+        exec_id = run.get("executionId")
+        if isinstance(exec_id, str) and exec_id:
+            bucket["executionIds"].append(exec_id)
+        name = run.get("name")
+        bucket["runNames"].append(str(name) if name is not None else "")
+        acc = _headline_accuracy_pct(metrics)
+        if acc is not None:
+            acc_by_kind.setdefault(kind, []).append(acc)
+    for kind, bucket in by_kind.items():
+        _finalize_kind_bucket(bucket, acc_by_kind.get(kind, []))
+    return _order_kind_breakdown(by_kind)
+
+
+def _ensure_kind_breakdown(
+    payload: dict[str, Any],
+    client: NimbusClient | None = None,
+) -> dict[str, Any]:
+    """Recompute ``aggregates.kindBreakdown`` on read (legacy / wrong labels).
+
+    Always rebuilds from run signals so a prior all-loso misclassification
+    (0.14.7 bare-nGroups fallback) is corrected. Optional ``client`` enriches
+    unstamped rows from ``GET /api/result/{id}`` so method/groupKind match
+    ``stats.grouped``. Does not change pooled metric means; does not rewrite
+    the on-disk snapshot.
+    """
+    aggregates = payload.get("aggregates")
+    if not isinstance(aggregates, dict):
+        return payload
+    raw_runs = payload.get("runs")
+    if not isinstance(raw_runs, list):
+        return payload
+    runs: list[Any] = []
+    dict_runs: list[dict[str, Any]] = []
+    for raw in raw_runs:
+        if isinstance(raw, dict):
+            copied = dict(raw)
+            runs.append(copied)
+            dict_runs.append(copied)
+        else:
+            runs.append(raw)
+    if client is not None:
+        _enrich_payload_runs_kind_signals(dict_runs, client)
+    for run in dict_runs:
+        if run.get("status") != "completed":
+            continue
+        metrics = run.get("metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            continue
+        run["evaluationKind"] = _infer_kind_from_payload_run(run)
+    refreshed = _kind_breakdown_from_payload_runs(dict_runs)
+    if not refreshed:
+        return payload
+    out = dict(payload)
+    out["runs"] = runs
+    out_agg = dict(aggregates)
+    out_agg["kindBreakdown"] = refreshed
+    out["aggregates"] = out_agg
+    return out
+
+
 def _compute_aggregates(runs: list[RunRow]) -> dict[str, Any]:
     """{metric: {mean, std, best: {name, value}}} over completed runs only.
-    std is the population standard deviation; None below 2 values."""
+    std is the population standard deviation; None below 2 values.
+
+    Also labels what was pooled (#470): ``pooledExecutionIds`` /
+    ``pooledRunNames`` / ``kindBreakdown`` so a LOSO run mixed into a
+    per-subject campaign is visible (ids + evaluation kind + per-kind mean)
+    in the aggregate. The pooled headline mean is unchanged (still over all
+    completed runs).
+    """
     completed = [run for run in runs if run.status == "completed" and run.metrics]
     aggregates: dict[str, Any] = {}
     for key in _AGGREGATE_METRICS:
@@ -270,13 +715,21 @@ def _compute_aggregates(runs: list[RunRow]) -> dict[str, Any]:
             "mean": fmean(values),
             "std": pstdev(values) if len(values) >= 2 else None,
             "best": {"name": best_name, "value": best_value},
+            "n": len(values),
         }
+    if completed:
+        aggregates["pooledExecutionIds"] = [
+            run.execution_id for run in completed if run.execution_id
+        ]
+        aggregates["pooledRunNames"] = [run.name for run in completed]
+        aggregates["kindBreakdown"] = _kind_breakdown_from_run_rows(completed)
     return aggregates
 
 
 def _experiment_worker(
     state: ExperimentState,
     binding: AbstractContextManager[NimbusClient],
+    fingerprint: str,
 ) -> None:
     """Background thread body: drive the experiment, then finalize status and
     aggregates. The binding owns the worker's client lifetime — the hosted
@@ -300,6 +753,7 @@ def _experiment_worker(
                 state.status = (
                     "failed" if all(run.status == "failed" for run in state.runs) else "completed"
                 )
+            EXPERIMENTS.persist(fingerprint, state)
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
@@ -371,7 +825,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         worker_binding = client.bound_client()
         threading.Thread(
             target=_experiment_worker,
-            args=(state, worker_binding),
+            args=(state, worker_binding, fingerprint),
             name=f"nimbus-experiment-{experiment_id[:8]}",
             daemon=True,
         ).start()
@@ -386,9 +840,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
     @mcp.tool(name="experiment.get", annotations=READ_ONLY)
     def get_experiment(experiment_id: str) -> dict[str, Any]:
         """Experiment snapshot: status (running/completed/failed), per-run rows
-        ({name, executionId, status, error?, metrics?}) and, once finished,
-        aggregates {metric: {mean, std, best: {name, value}}} over completed
-        runs only (std = population; None below 2 values).
+        ({name, executionId, status, error?, metrics?, evaluationKind?}) and,
+        once finished, aggregates over completed runs only: per-metric
+        {mean, std, best, n}, plus ``pooledExecutionIds`` / ``pooledRunNames``
+        / ``kindBreakdown`` (per-subject vs LOSO etc. — each row has kind, n,
+        mean, std, executionIds, runNames; #470). Pooled headline means are
+        unchanged; kindBreakdown labels what was pooled. std is population;
+        None below 2 values. kindBreakdown is always present when aggregates
+        exist (including single-kind experiments).
 
         Args:
             experiment_id: The experiment to inspect (from experiment.run).
@@ -403,7 +862,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         snapshot = EXPERIMENTS.snapshot(client.credential_fingerprint(), exp_id)
         if snapshot is None:
             raise McpToolError(
-                f"Unknown experiment '{exp_id}'. It was run in another MCP server "
-                "process, or the id is wrong — experiment state is process-local."
+                f"Unknown experiment '{exp_id}'. No in-memory or on-disk snapshot "
+                "was found for this credential (wrong id, different machine, or "
+                "the experiment never finished persisting)."
             )
-        return snapshot
+        # Recompute kindBreakdown (and enrich unstamped legacy rows from
+        # /api/result) so classification matches stats.grouped on the same ids.
+        return _ensure_kind_breakdown(snapshot, client=client)

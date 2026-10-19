@@ -212,6 +212,29 @@ def test_connection_error_raises_backend_down_hint():
         c.get("/api/templates")
 
 
+def test_token_mode_connection_error_is_hosted_hint():
+    """#471 — hosted Pro must not say 'Start the desktop app'."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused")
+
+    c = make_token_client(handler)
+    with pytest.raises(McpToolError, match="Cannot reach hosted Nimbus") as exc:
+        c.get("/api/templates")
+    assert "desktop app" not in str(exc.value).lower()
+
+
+def test_token_mode_timeout_is_hosted_hint():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow")
+
+    c = make_token_client(handler)
+    with pytest.raises(McpToolError, match="Timed out talking to hosted Nimbus") as exc:
+        c.get("/api/templates")
+    assert "desktop" not in str(exc.value).lower()
+    assert "foundation.compare" in str(exc.value)
+
+
 # ── v0.6: backend >=400 errors carry structured status_code + code attrs ─────
 # data.inspect_file branches on these to convert the hosted local-path refusal into
 # guidance, instead of parsing the human-readable message text.

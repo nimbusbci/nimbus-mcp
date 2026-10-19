@@ -13,3 +13,16 @@ def safe_segment(value: str, *, label: str = "execution id") -> str:
     if not value or "/" in value or "\\" in value or ".." in value or Path(value).name != value:
         raise McpToolError(f"Invalid {label} '{value}'.")
     return value
+
+
+def safe_upload_path(value: str, *, label: str = "upload path") -> str:
+    """Validate a relative upload path (may contain ``/``, never ``..`` or abs)."""
+    cleaned = (value or "").replace("\\", "/").strip()
+    if (
+        not cleaned
+        or cleaned.startswith("/")
+        or ".." in cleaned.split("/")
+        or cleaned.startswith("~")
+    ):
+        raise McpToolError(f"Invalid {label} '{value}'.")
+    return cleaned

@@ -19,6 +19,19 @@ _BACKEND_DOWN_HINT = (
     "Cannot reach the Nimbus backend at {url}. "
     "Start the desktop app (or the dev backend on :8080) and retry."
 )
+_HOSTED_DOWN_HINT = (
+    "Cannot reach hosted Nimbus at {url}. Check network connectivity and "
+    "NIMBUS_API_URL, then retry."
+)
+_TIMEOUT_HINT_LOCAL = (
+    "Timed out talking to the Nimbus backend at {url}. Is the desktop/dev "
+    "backend running and not stuck on a heavy job?"
+)
+_TIMEOUT_HINT_HOSTED = (
+    "Timed out talking to hosted Nimbus at {url} (request limit {timeout}s). "
+    "Heavy calls like foundation.compare embed every backbone — retry, or "
+    "narrow the data (fewer trials / one subject)."
+)
 _AUTH_HINT = (
     "Nimbus rejected the MCP key ({status}). Check that MCP_LOCAL_KEY on the backend "
     "matches NIMBUS_MCP_KEY for this server, and that the backend runs locally "
@@ -162,6 +175,22 @@ class NimbusClient:
     def post_bytes(self, path: str, json: dict[str, Any] | None = None) -> bytes:
         return self._request("POST", path, json=json, content=True)
 
+    def _unreachable_error(self, err: BaseException) -> McpToolError:
+        """Hosted-aware connectivity / timeout message (#471)."""
+        url = self.config.api_url
+        timeout = getattr(self._http.timeout, "read", None) or getattr(
+            self._http.timeout, "timeout", 300.0
+        )
+        if isinstance(err, httpx.TimeoutException):
+            if self._token_mode:
+                return McpToolError(
+                    _TIMEOUT_HINT_HOSTED.format(url=url, timeout=timeout)
+                )
+            return McpToolError(_TIMEOUT_HINT_LOCAL.format(url=url))
+        if self._token_mode:
+            return McpToolError(_HOSTED_DOWN_HINT.format(url=url))
+        return McpToolError(_BACKEND_DOWN_HINT.format(url=url))
+
     def post_file(self, path: str, file_path: Path, fields: dict[str, str] | None = None) -> Any:
         """POST a multipart/form-data request with one ``file`` part plus text fields."""
         data_fields = dict(fields or {})
@@ -169,7 +198,7 @@ class NimbusClient:
             with open(file_path, "rb") as fh:
                 resp = self._http.post(path, data=data_fields, files={"file": fh})
         except httpx.HTTPError as err:
-            raise McpToolError(_BACKEND_DOWN_HINT.format(url=self.config.api_url)) from err
+            raise self._unreachable_error(err) from err
         if resp.status_code == 401:
             raise self._auth_rejection(resp.status_code)
         if resp.status_code >= 400:
@@ -189,7 +218,7 @@ class NimbusClient:
         try:
             resp = self._http.request(method, path, params=params, json=json)
         except httpx.HTTPError as err:
-            raise McpToolError(_BACKEND_DOWN_HINT.format(url=self.config.api_url)) from err
+            raise self._unreachable_error(err) from err
         # 401 = the credential was rejected by the auth layer (stale API token in
         # hosted mode, wrong key locally). 403 is a policy denial (e.g. freemium
         # limits) — let it fall through to the generic path so the backend's

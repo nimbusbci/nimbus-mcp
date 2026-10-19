@@ -19,7 +19,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 
 | Capability | nimbus-mcp | bci-mcp | eeg-mcp | mne-mcp | ephys-mcp |
 |---|---|---|---|---|---|
-| Build + validate + run BCI pipelines | ✅ 59 tools | — | — | — | — |
+| Build + validate + run BCI pipelines | ✅ 60 tools | — | — | — | — |
 | Train on real data (MOABB packs, uploads) | ✅ | — | — | file I/O only | NWB/DANDI |
 | Bring-your-own model code (`python_model`) | ✅ local + cloud sandbox | — | — | — | — |
 | Benchmark leaderboard + server-side LOSO scoring | ✅ | — | — | — | — |
@@ -200,7 +200,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 59 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 60 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -255,11 +255,11 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (59)
+## Tools (60)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
-Data: `data.upload`
+Data: `data.upload`, `data.delete_upload` (needs `confirm=true`)
 Inspect: `data.inspect_dataset`, `data.inspect_file` (EDA: channels, class balance, band powers, PSD)
 Build: `pipeline.validate`, `pipeline.validate_node`
 Run: `execution.run` (non-blocking), `execution.get`, `execution.list`, `execution.results`, `execution.cancel`
@@ -391,8 +391,10 @@ projects, so you can open the canvas and see exactly what ran.
 > it in the studio."
 
 `project.create(name)` makes the container, `project.save(project_id,
-train_graph)` writes the graph (layout auto-generated, revision conflicts retried
-once) and `project.load(project_id)` reads it back for editing or re-running.
+train_graph, expected_revision=…)` writes the graph (layout auto-generated;
+pass `expected_revision` from `project.load` so concurrent edits conflict
+instead of silently overwriting) and `project.load(project_id)` reads it back
+for editing or re-running.
 With `MCP_LOCAL_USER_ID` set to your user id, the project shows up in **your**
 studio project list.
 

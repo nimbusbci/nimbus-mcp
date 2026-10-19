@@ -58,7 +58,15 @@ async def test_projects_and_experiment_flow():
                 "catalog.template", {"template_id": templates.data["templates"][0]["id"]}
             )
         ).data["train"]
-        saved = await c.call_tool("project.save", {"project_id": pid, "train_graph": train})
+        loaded = await c.call_tool("project.load", {"project_id": pid})
+        saved = await c.call_tool(
+            "project.save",
+            {
+                "project_id": pid,
+                "train_graph": train,
+                "expected_revision": loaded.data["revision"],
+            },
+        )
         assert saved.data["revision"] >= 1
         loaded = await c.call_tool("project.load", {"project_id": pid})
         assert loaded.data["train"]["nodes"]

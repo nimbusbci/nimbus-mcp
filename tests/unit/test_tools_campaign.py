@@ -22,6 +22,18 @@ TRAIN_GRAPH = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _campaign_disk_under_tmp(tmp_path, monkeypatch):
+    """Keep experiment persistence out of the real ``~/.nimbus`` (sandbox /
+    CI permission noise, and cross-test leakage)."""
+    root = tmp_path / "nimbus-experiments"
+    monkeypatch.setattr(
+        campaign,
+        "_experiment_disk_dir",
+        lambda fingerprint: root / fingerprint[:8],
+    )
+
+
 class FakeBackend:
     """Simulates the three endpoints the campaign orchestrator drives, on the
     REAL backend wire contract (pinned against nimbus_backend):
@@ -186,6 +198,323 @@ async def test_run_experiment_single_run_completes_with_aggregates(monkeypatch):
         assert kappa["mean"] == pytest.approx(0.5)
         assert kappa["std"] is None  # single value: std needs >= 2
         assert kappa["best"] == {"name": "r1", "value": 0.5}
+
+
+def test_compute_aggregates_kind_breakdown_mixed_per_subject_and_loso():
+    """Mixed campaign: aggregates label per-subject vs LOSO pooling (#470)."""
+    per_subject_graph = {
+        "nodes": [
+            {"id": "d", "type": "public_data", "config": {"subject": "S01"}},
+            {
+                "id": "ep",
+                "type": "evaluation_plan",
+                "config": {"method": "within_session"},
+            },
+        ],
+        "connections": [],
+    }
+    loso_graph = {
+        "nodes": [
+            {
+                "id": "d",
+                "type": "public_data",
+                "config": {"subject": "S01,S02,S03,S04,S05"},
+            },
+            {"id": "ep", "type": "evaluation_plan", "config": {"method": "loso"}},
+        ],
+        "connections": [],
+    }
+    runs = [
+        campaign.RunRow(
+            name="S01",
+            train_graph=per_subject_graph,
+            execution_id="e1",
+            status="completed",
+            metrics={"accuracyPct": 69.58, "kappa": 0.4},
+        ),
+        campaign.RunRow(
+            name="S02",
+            train_graph=per_subject_graph,
+            execution_id="e2",
+            status="completed",
+            metrics={"accuracyPct": 59.56, "kappa": 0.2},
+        ),
+        campaign.RunRow(
+            name="S03",
+            train_graph=per_subject_graph,
+            execution_id="e3",
+            status="completed",
+            metrics={"accuracyPct": 55.56, "kappa": 0.1},
+        ),
+        campaign.RunRow(
+            name="LOSO",
+            train_graph=loso_graph,
+            execution_id="531b846b",
+            status="completed",
+            metrics={"accuracyPct": 58.44, "kappa": 0.3, "nGroups": 3},
+        ),
+    ]
+    aggregates = campaign._compute_aggregates(runs)
+    assert aggregates["pooledExecutionIds"] == ["e1", "e2", "e3", "531b846b"]
+    # Pooled headline mean unchanged (still all completed runs, incl. LOSO).
+    assert aggregates["accuracyPct"]["n"] == 4
+    assert aggregates["accuracyPct"]["mean"] == pytest.approx(
+        (69.58 + 59.56 + 55.56 + 58.44) / 4.0
+    )
+    breakdown = {row["kind"]: row for row in aggregates["kindBreakdown"]}
+    assert breakdown["per_subject"]["n"] == 3
+    assert breakdown["per_subject"]["mean"] == pytest.approx(
+        (69.58 + 59.56 + 55.56) / 3.0
+    )
+    assert breakdown["per_subject"]["executionIds"] == ["e1", "e2", "e3"]
+    assert breakdown["loso"]["n"] == 1
+    assert breakdown["loso"]["mean"] == pytest.approx(58.44)
+    assert breakdown["loso"]["std"] is None
+    assert breakdown["loso"]["executionIds"] == ["531b846b"]
+    assert breakdown["loso"]["runNames"] == ["LOSO"]
+    assert campaign._infer_evaluation_kind(runs[0]) == "per_subject"
+    assert campaign._infer_evaluation_kind(runs[3]) == "loso"
+
+
+def test_compute_aggregates_kind_breakdown_single_kind_still_present():
+    """Single-kind campaigns still get kindBreakdown (always present when aggregates)."""
+    graph = {
+        "nodes": [
+            {"id": "d", "type": "public_data", "config": {"subject": "S01"}},
+            {
+                "id": "ep",
+                "type": "evaluation_plan",
+                "config": {"method": "within_session"},
+            },
+        ],
+        "connections": [],
+    }
+    runs = [
+        campaign.RunRow(
+            name="S01",
+            train_graph=graph,
+            execution_id="only-1",
+            status="completed",
+            metrics={"accuracyPct": 70.0},
+        ),
+        campaign.RunRow(
+            name="S02",
+            train_graph=graph,
+            execution_id="only-2",
+            status="completed",
+            metrics={"accuracyPct": 60.0},
+        ),
+    ]
+    aggregates = campaign._compute_aggregates(runs)
+    assert "kindBreakdown" in aggregates
+    assert len(aggregates["kindBreakdown"]) == 1
+    row = aggregates["kindBreakdown"][0]
+    assert row["kind"] == "per_subject"
+    assert row["n"] == 2
+    assert row["mean"] == pytest.approx(65.0)
+
+
+def _acb2c103_legacy_aggregates() -> dict:
+    return {
+        "accuracyPct": {
+            "mean": (69.58 + 59.56 + 55.56 + 58.44) / 4.0,
+            "std": 5.0,
+            "best": {"name": "S01", "value": 69.58},
+            "n": 4,
+        },
+        "pooledExecutionIds": ["c73ca095", "b6e89401", "539bdd4c", "531b846b"],
+        "pooledRunNames": ["S01", "S02", "S03", "LOSO"],
+        # 0.14.7 live fail: bare nGroups→loso collapsed everything into one bucket.
+        "kindBreakdown": [
+            {
+                "kind": "loso",
+                "n": 4,
+                "executionIds": ["c73ca095", "b6e89401", "539bdd4c", "531b846b"],
+                "mean": (69.58 + 59.56 + 55.56 + 58.44) / 4.0,
+                "std": 5.0,
+            }
+        ],
+    }
+
+
+def test_ensure_kind_breakdown_acb2c103_nGroups_on_per_subject_not_all_loso():
+    """Live #470 fail shape: unstamped per-subject runs also carry nGroups=5.
+
+    Bare nGroups must not imply loso. Backend-style method / cvGrouping signals
+    (as stamped after /api/result enrichment, or present on the row) split
+    per_subject n=3 vs loso n=1 with the live means.
+    """
+    payload = {
+        "experimentId": "acb2c103b0d645dfbecbb647fba0f50b",
+        "status": "completed",
+        "runs": [
+            {
+                "name": "S01",
+                "executionId": "c73ca095",
+                "status": "completed",
+                "metrics": {"accuracyPct": 69.58, "nGroups": 5},
+                "evaluationMethod": "within_session",
+                "cvGrouping": "session",
+            },
+            {
+                "name": "S02",
+                "executionId": "b6e89401",
+                "status": "completed",
+                "metrics": {"accuracyPct": 59.56, "nGroups": 5},
+                "evaluationMethod": "within_session",
+                "cvGrouping": "session",
+            },
+            {
+                "name": "S03",
+                "executionId": "539bdd4c",
+                "status": "completed",
+                "metrics": {"accuracyPct": 55.56, "nGroups": 5},
+                "evaluationMethod": "within_session",
+                "cvGrouping": "session",
+            },
+            {
+                "name": "LOSO",
+                "executionId": "531b846b",
+                "status": "completed",
+                "metrics": {"accuracyPct": 58.44, "nGroups": 3},
+                "evaluationMethod": "loso",
+                "groupKind": "subject",
+            },
+        ],
+        "aggregates": _acb2c103_legacy_aggregates(),
+    }
+    fixed = campaign._ensure_kind_breakdown(payload)
+    assert fixed["aggregates"]["accuracyPct"]["mean"] == pytest.approx(
+        (69.58 + 59.56 + 55.56 + 58.44) / 4.0
+    )
+    breakdown = {row["kind"]: row for row in fixed["aggregates"]["kindBreakdown"]}
+    assert set(breakdown) == {"per_subject", "loso"}
+    assert breakdown["per_subject"]["n"] == 3
+    assert breakdown["per_subject"]["mean"] == pytest.approx(
+        (69.58 + 59.56 + 55.56) / 3.0
+    )
+    assert breakdown["loso"]["n"] == 1
+    assert breakdown["loso"]["mean"] == pytest.approx(58.44)
+    # Prior all-loso bucket replaced; input not mutated.
+    assert payload["aggregates"]["kindBreakdown"][0]["n"] == 4
+
+
+def test_infer_kind_bare_nGroups_alone_is_not_loso():
+    """nGroups without method/groupKind must not classify as loso (#470 live)."""
+    run = {
+        "status": "completed",
+        "executionId": "c73ca095",
+        "metrics": {"accuracyPct": 69.58, "nGroups": 5},
+    }
+    assert campaign._infer_kind_from_payload_run(run) == "per_subject"
+
+
+def test_infer_kind_stamped_evaluation_kind_wins_over_nGroups():
+    """Stamped evaluationKind takes priority over conflicting nGroups."""
+    run = {
+        "status": "completed",
+        "executionId": "c73ca095",
+        "evaluationKind": "per_subject",
+        "metrics": {"accuracyPct": 69.58, "nGroups": 5},
+        "evaluationMethod": "loso",  # would be loso if stamp ignored
+        "groupKind": "subject",
+    }
+    assert campaign._infer_kind_from_payload_run(run) == "per_subject"
+    loso = {
+        "status": "completed",
+        "executionId": "531b846b",
+        "evaluationKind": "loso",
+        "metrics": {"accuracyPct": 58.44},
+        "evaluationMethod": "within_session",
+        "cvGrouping": "session",
+    }
+    assert campaign._infer_kind_from_payload_run(loso) == "loso"
+
+
+def test_ensure_kind_breakdown_enriches_from_result_api():
+    """Unstamped nGroups=5 rows: fetch evaluationSummary.method like stats.grouped."""
+
+    class _ResultClient:
+        def get(self, path: str) -> dict:
+            exec_id = path.rsplit("/", 1)[-1]
+            if exec_id == "531b846b":
+                return {
+                    "result": {
+                        "metrics": {"accuracyPct": 58.44, "nGroups": 3},
+                        "results": {
+                            "evaluationSummary": {
+                                "method": "loso",
+                                "cvGrouping": "subject",
+                            },
+                            "foldResults": {
+                                "grouped_accuracy_stats": {
+                                    "nGroups": 3,
+                                    "groupKind": "subject",
+                                }
+                            },
+                        },
+                    }
+                }
+            return {
+                "result": {
+                    "metrics": {"accuracyPct": 69.58, "nGroups": 5},
+                    "results": {
+                        "evaluationSummary": {
+                            "method": "within_session",
+                            "cvGrouping": "session",
+                        },
+                        "foldResults": {
+                            "grouped_accuracy_stats": {
+                                "nGroups": 5,
+                                "groupKind": "session",
+                            }
+                        },
+                    },
+                }
+            }
+
+    payload = {
+        "experimentId": "acb2c103b0d645dfbecbb647fba0f50b",
+        "status": "completed",
+        "runs": [
+            {
+                "name": "S01",
+                "executionId": "c73ca095",
+                "status": "completed",
+                "metrics": {"accuracyPct": 69.58, "nGroups": 5},
+            },
+            {
+                "name": "S02",
+                "executionId": "b6e89401",
+                "status": "completed",
+                "metrics": {"accuracyPct": 59.56, "nGroups": 5},
+            },
+            {
+                "name": "S03",
+                "executionId": "539bdd4c",
+                "status": "completed",
+                "metrics": {"accuracyPct": 55.56, "nGroups": 5},
+            },
+            {
+                "name": "LOSO",
+                "executionId": "531b846b",
+                "status": "completed",
+                "metrics": {"accuracyPct": 58.44, "nGroups": 3},
+            },
+        ],
+        "aggregates": _acb2c103_legacy_aggregates(),
+    }
+    fixed = campaign._ensure_kind_breakdown(payload, client=_ResultClient())
+    breakdown = {row["kind"]: row for row in fixed["aggregates"]["kindBreakdown"]}
+    assert breakdown["per_subject"]["n"] == 3
+    assert breakdown["per_subject"]["mean"] == pytest.approx(
+        (69.58 + 59.56 + 55.56) / 3.0
+    )
+    assert breakdown["loso"]["n"] == 1
+    assert breakdown["loso"]["mean"] == pytest.approx(58.44)
+    kinds = {r["executionId"]: r["evaluationKind"] for r in fixed["runs"]}
+    assert kinds["c73ca095"] == "per_subject"
+    assert kinds["531b846b"] == "loso"
 
 
 async def test_run_experiment_retries_queue_full(monkeypatch):
@@ -477,10 +806,17 @@ async def test_experiment_invisible_across_credentials(monkeypatch):
         assert snapshot.data["runs"][0]["metrics"]["kappa"] == 0.5
 
 
-def test_experiments_registry_keys_by_credential_fingerprint():
+def test_experiments_registry_keys_by_credential_fingerprint(tmp_path, monkeypatch):
     """The registry stores/looks up by ``"<fingerprint>:<experiment_id>"`` —
     the same experiment_id under two fingerprints is two entries, and an
     unknown id under a known fingerprint is a miss."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Path.home() reads the real home on some platforms — pin the store root.
+    monkeypatch.setattr(
+        campaign,
+        "_experiment_disk_dir",
+        lambda fingerprint: tmp_path / "exp" / fingerprint[:8],
+    )
     reg = campaign.Experiments()
     state = campaign.ExperimentState("exp1", [], max_in_flight=1)
     reg.add(state, fingerprint="fp_alice")
@@ -488,6 +824,28 @@ def test_experiments_registry_keys_by_credential_fingerprint():
     assert reg.snapshot("fp_alice", "exp1")["experimentId"] == "exp1"
     assert reg.snapshot("fp_bob", "exp1") is None  # other tenant: miss
     assert reg.snapshot("fp_alice", "exp_other") is None
+
+
+def test_experiments_snapshot_survives_process_local_clear(tmp_path, monkeypatch):
+    """Disk fallback answers experiment.get after the in-memory entry is gone (#476)."""
+    monkeypatch.setattr(
+        campaign,
+        "_experiment_disk_dir",
+        lambda fingerprint: tmp_path / "exp" / fingerprint[:8],
+    )
+    reg = campaign.Experiments()
+    state = campaign.ExperimentState("exp-persist", [], max_in_flight=1)
+    state.status = "completed"
+    state.aggregates = {"kappa": {"mean": 0.4, "std": None, "best": {"name": "r", "value": 0.4}}}
+    reg.add(state, fingerprint="fp_alice")
+    # Simulate a fresh process: empty memory, same credential fingerprint.
+    reg2 = campaign.Experiments()
+    restored = reg2.snapshot("fp_alice", "exp-persist")
+    assert restored is not None
+    assert restored["experimentId"] == "exp-persist"
+    assert restored["status"] == "completed"
+    assert restored["aggregates"]["kappa"]["mean"] == 0.4
+    assert reg2.snapshot("fp_bob", "exp-persist") is None
 
 
 def test_experiments_registry_evicts_oldest_terminal_over_cap():

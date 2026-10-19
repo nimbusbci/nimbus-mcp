@@ -66,7 +66,14 @@ FIGURE_OUTPUT_SCHEMA: dict[str, Any] = {
         "ok": {"type": "boolean"},
         "title": {"type": ["string", "null"]},
         "mimeType": {"type": "string"},
-        "meta": {"type": "object", "additionalProperties": True},
+        "meta": {
+            "type": "object",
+            "additionalProperties": True,
+            "description": (
+                "Figure sidecar. foundation.compare includes results/best/skipped "
+                "(also as a JSON text content block)."
+            ),
+        },
         "savedPath": {"type": "string", "description": "Set when save=true."},
         "sizeBytes": {"type": "integer", "description": "Set when save=true."},
     },

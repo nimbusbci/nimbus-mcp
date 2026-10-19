@@ -44,7 +44,10 @@ async def test_upload_data_posts_multipart(tmp_path):
     src = tmp_path / "rec.csv"
     src.write_text("a,b\n1,2\n")
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("data.upload", {"file_path": str(src), "dataset_name": "my-rec"})
+        result = await c.call_tool(
+            "data.upload",
+            {"file_path": str(src), "dataset_name": "my-rec", "sampling_rate": 250.0},
+        )
     assert seen["path"] == "/api/upload"
     assert "multipart/form-data" in seen["ct"]
     assert b'name="dataset_name"' in seen["body"]
@@ -88,10 +91,10 @@ async def test_upload_data_omits_null_config_keys(tmp_path):
 
     def handler(req: httpx.Request) -> httpx.Response:
         seen["body"] = req.read()
-        return httpx.Response(200, json={"ok": True, "file": {"path": "x/r.csv"}})
+        return httpx.Response(200, json={"ok": True, "file": {"path": "x/r.edf"}})
 
-    src = tmp_path / "rec.csv"
-    src.write_text("a,b\n1,2\n")
+    src = tmp_path / "rec.edf"
+    src.write_bytes(b"0" * 256)
     async with Client(make_server(handler)) as c:
         await c.call_tool("data.upload", {"file_path": str(src), "format": "edf"})
     assert b'name="config"' in seen["body"]
@@ -99,15 +102,26 @@ async def test_upload_data_omits_null_config_keys(tmp_path):
     assert b"samplingRate" not in seen["body"]
 
 
+async def test_upload_csv_requires_sampling_rate_before_http(tmp_path):
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("CSV without sampling_rate must not hit HTTP")
+
+    src = tmp_path / "rec.csv"
+    src.write_text("a,b\n1,2\n")
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="sampling_rate is required"):
+            await c.call_tool("data.upload", {"file_path": str(src)})
+
+
 async def test_upload_data_without_config_sends_no_config_field(tmp_path):
     seen = {}
 
     def handler(req: httpx.Request) -> httpx.Response:
         seen["body"] = req.read()
-        return httpx.Response(200, json={"ok": True, "file": {"path": "x/r.csv"}})
+        return httpx.Response(200, json={"ok": True, "file": {"path": "x/r.edf"}})
 
-    src = tmp_path / "rec.csv"
-    src.write_text("a,b\n1,2\n")
+    src = tmp_path / "rec.edf"
+    src.write_bytes(b"0" * 256)
     async with Client(make_server(handler)) as c:
         await c.call_tool("data.upload", {"file_path": str(src)})
     assert b'name="config"' not in seen["body"]
@@ -122,3 +136,47 @@ async def test_upload_data_rejects_non_positive_sampling_rate_before_http(tmp_pa
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="sampling_rate"):
             await c.call_tool("data.upload", {"file_path": str(src), "sampling_rate": 0.0})
+
+
+async def test_delete_upload_refuses_without_confirm():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not touch HTTP without confirm")
+
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool("data.delete_upload", {"path": "user_x/rec.csv"})
+    assert r.data["deleted"] is False
+    assert "confirm=true" in r.data["message"]
+
+
+async def test_delete_upload_sends_delete_with_confirm():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["method"] = req.method
+        seen["path"] = req.url.path
+        seen["query"] = dict(req.url.params)
+        return httpx.Response(
+            200, json={"ok": True, "path": "user_x/rec.csv", "message": "Upload deleted"}
+        )
+
+    async with Client(make_server(handler)) as c:
+        r = await c.call_tool(
+            "data.delete_upload", {"path": "user_x/rec.csv", "confirm": True}
+        )
+    assert seen == {
+        "method": "DELETE",
+        "path": "/api/uploads",
+        "query": {"path": "user_x/rec.csv"},
+    }
+    assert r.data["deleted"] is True and r.data["path"] == "user_x/rec.csv"
+
+
+async def test_delete_upload_rejects_traversal_path():
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not touch HTTP for an unsafe path")
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(Exception, match="upload path"):
+            await c.call_tool(
+                "data.delete_upload", {"path": "../evil.csv", "confirm": True}
+            )
