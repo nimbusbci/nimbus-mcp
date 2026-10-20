@@ -9,9 +9,14 @@ from typing import Any
 
 import httpx
 
-from .config import McpConfig, load_config, missing_credential_error
+from .config import McpConfig, load_config
 from .errors import McpToolError
-from .setup_mode import SetupRequired, setup_guidance, token_rejected_guidance
+from .setup_mode import (
+    SetupRequired,
+    local_mode_guidance,
+    setup_guidance,
+    token_rejected_guidance,
+)
 
 __all__ = ["McpToolError", "NimbusClient", "NullClient"]
 
@@ -81,11 +86,19 @@ class NimbusClient:
         if config.nimbus_token:
             headers = {"Authorization": f"Bearer {config.nimbus_token}"}
             self._token_mode = True
+            self.access_mode = "hosted"
         elif config.mcp_key:
             headers = {"X-MCP-Key": config.mcp_key}
             self._token_mode = False
+            self.access_mode = "local"
         else:
-            raise missing_credential_error()
+            # Local Free tier (plan X9): no credential is NOT an error. The
+            # client talks to the local backend (desktop app / dev backend)
+            # anonymously; cloud-only tools answer with a structured login
+            # prompt at the moment they need an account (access.py).
+            headers = {}
+            self._token_mode = False
+            self.access_mode = "anonymous"
         self.config = config
         self._http = httpx.Client(
             base_url=config.api_url,
@@ -110,9 +123,17 @@ class NimbusClient:
     def ensure_ready(self) -> None:
         """Preflight hook for tools that do work outside the request path
         (campaign's ``run_experiment`` spawns a worker thread that would
-        otherwise swallow a missing credential). A real client always has
-        credentials attached, so this is a no-op; :class:`NullClient` raises
-        :class:`SetupRequired` instead."""
+        otherwise swallow a missing credential). Credentialed clients are a
+        no-op; :class:`NullClient` raises :class:`SetupRequired`. Anonymous
+        Local Free clients probe the local backend's health endpoint
+        (bounded 2 s): unreachable -> the local-mode guidance, so a campaign
+        never registers state for a backend that does not exist."""
+        if getattr(self, "access_mode", None) != "anonymous":
+            return None
+        try:
+            httpx.get(f"{self.config.api_url}/health", timeout=2.0)
+        except httpx.HTTPError:
+            raise SetupRequired(local_mode_guidance(None)) from None
         return None
 
     def credential_report(self) -> dict[str, Any]:
@@ -129,8 +150,8 @@ class NimbusClient:
         """Stable id of the credential this client authenticates with — the
         scope key for process-local state (see
         :func:`_credential_fingerprint`), so state registered under one
-        credential is invisible under another. The constructor guarantees a
-        secret, so ``"anon"`` is unreachable in practice."""
+        credential is invisible under another. Anonymous Local Free clients
+        (no secret) share the ``"anon"`` scope."""
         secret = self.config.nimbus_token or self.config.mcp_key
         return _credential_fingerprint(secret) if secret else "anon"
 
@@ -142,6 +163,10 @@ class NimbusClient:
         the guidance dict by the server middleware). Key mode: a wrong local
         key, which no login fixes — keep the MCP_LOCAL_KEY mismatch hint.
         """
+        if getattr(self, "access_mode", None) == "anonymous":
+            # Anonymous local call rejected: the fix is a local identity
+            # (desktop app / dev key), NOT a Studio login.
+            return SetupRequired(local_mode_guidance(status))
         if self._token_mode:
             return SetupRequired(token_rejected_guidance(self.config.nimbus_token, status))
         return McpToolError(_AUTH_HINT.format(status=status))
@@ -177,6 +202,11 @@ class NimbusClient:
 
     def _unreachable_error(self, err: BaseException) -> McpToolError:
         """Hosted-aware connectivity / timeout message (#471)."""
+        if getattr(self, "access_mode", None) == "anonymous":
+            # No local backend to talk to and no local identity: the local
+            # onboarding guidance (desktop app / dev key) is the actionable
+            # answer — a raw connect error would dead-end Local Free users.
+            return SetupRequired(local_mode_guidance(None))
         url = self.config.api_url
         timeout = getattr(self._http.timeout, "read", None) or getattr(
             self._http.timeout, "timeout", 300.0

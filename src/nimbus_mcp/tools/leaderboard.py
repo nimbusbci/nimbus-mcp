@@ -6,6 +6,15 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from ..access import (
+    MODE_ANONYMOUS,
+    MODE_HOSTED,
+    TIER_PRO,
+    account_tier,
+    client_mode,
+    login_prompt,
+    tier_gate,
+)
 from ..client import McpToolError, NimbusClient
 from ._annotations import MUTATING, READ_ONLY
 
@@ -111,6 +120,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         class_name: str | None = None,
         requirements: list[str] | None = None,
         track: str = "cross_subject",
+        verification: str = "verified",
         backbone_kind: str | None = None,
         backbone_repo: str | None = None,
         backbone_revision: str | None = None,
@@ -125,6 +135,16 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         20, no URLs). Identical code resubmission is idempotent per track
         (``deduplicated: true``).
 
+        Verification contract (tier model X10): ``verification="verified"``
+        (default) is the server-side-scored submission above — on the hosted
+        backend it is Pro-only; free accounts get a structured tier response.
+        ``verification="unverified_local"`` names the designed Account-Free
+        lane for locally-computed results; the backend has no unverified
+        submission kind yet (see the response it returns — nothing is
+        stored, and no row is faked). Anonymous callers get a structured
+        login prompt: a submission needs an identity. Local (desktop/dev)
+        backends keep their existing server-side quota behaviour.
+
         Args:
             dataset_id: A dataset id from catalog.leaderboard
                 ``submittableDatasets`` (e.g. "BNCI2014_001"). A dataset can
@@ -136,6 +156,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 Required unless backbone_repo is set.
             class_name: Contract class to instantiate; omit to auto-detect.
             requirements: Optional PyPI requirements (e.g. ["sklearn>=1.4"]).
+            verification: "verified" (default; server-side scored, Pro on
+                the hosted backend) or "unverified_local" (Account-Free
+                locally-computed lane; see the tool description for its
+                current backend status).
             track: "cross_subject" (default — full-data leave-one-subject-out,
                 seed 42) or "pretrained_few_trial" (efficiency track: LOSO with
                 a protocol-fixed 100-trials-per-subject cap; code that imports
@@ -155,6 +179,69 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 and scores frozen-embeddings → linear probe server-side. When
                 backbone_repo is set, omit code.
         """
+        if verification not in ("verified", "unverified_local"):
+            raise McpToolError(
+                'verification must be "verified" (server-side scored) or '
+                f'"unverified_local" (locally computed); got {verification!r}.'
+            )
+        mode = client_mode(client)
+        if mode == MODE_ANONYMOUS:
+            # First cloud value: a board row needs an identity (plan 5.1).
+            return login_prompt(
+                "leaderboard_submit",
+                feature="leaderboard.submit",
+                reason=(
+                    "A leaderboard submission is published under your "
+                    "identity, so it needs a Nimbus Studio account. Local "
+                    "work (including scoring the same model locally) does not."
+                ),
+                local_alternative=(
+                    "Run and score the model locally with execution.run / "
+                    "experiment.run — no account needed."
+                ),
+            )
+        if verification == "unverified_local":
+            # Honest gap, not a fake row: the backend stores server-scored
+            # submissions only (extra body keys are rejected by design), so
+            # there is nowhere truthful to persist a locally-computed score
+            # yet. Backend work needed: an unverified submission kind
+            # (fingerprint + metrics, verification="unverified_local",
+            # excluded from verified rankings).
+            return {
+                "ok": False,
+                "unsupported": "unverified_local_submissions_not_yet_supported",
+                "verification": "unverified_local",
+                "reason": (
+                    "Account-Free unverified (local) submissions are part of "
+                    "the tier design, but the backend currently accepts only "
+                    "server-side-scored submissions, so nothing was stored. "
+                    "Your local result stands on its own; it is not on the "
+                    "board."
+                ),
+                "alternatives": [
+                    "Score it locally (execution.run / experiment.run) and "
+                    "keep the local record — no account or tier needed.",
+                    'Submit with verification="verified" for a server-scored '
+                    "board row (hosted: Pro tier).",
+                ],
+            }
+        if mode == MODE_HOSTED:
+            tier = account_tier(client)
+            if tier != TIER_PRO:
+                return tier_gate(
+                    "leaderboard.submit",
+                    current_tier=tier,
+                    detail=(
+                        "Verified (server-side-scored) leaderboard "
+                        "submissions are Pro on the hosted backend. Account "
+                        "Free covers local work and the unverified-local "
+                        "lane (verification=\"unverified_local\")."
+                    ),
+                    local_alternative=(
+                        "Score the model locally with execution.run / "
+                        "experiment.run — free at every tier."
+                    ),
+                )
         has_code = bool(code and code.strip())
         has_backbone = bool(backbone_repo and str(backbone_repo).strip())
         if not has_code and not has_backbone:
@@ -185,7 +272,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "revision": backbone_revision,
                 "license": backbone_license,
             }
-        return client.post("/api/leaderboard/submissions", json=body)
+        result = client.post("/api/leaderboard/submissions", json=body)
+        if isinstance(result, dict):
+            # Make the verification kind explicit on the way out (X10).
+            if mode == MODE_HOSTED:
+                result.setdefault("verification", "verified")
+                result.setdefault("scoring", "server-side")
+            else:
+                # Scored by the LOCAL backend's server-side scorer: a
+                # local-only row, not the hosted verified board.
+                result.setdefault("verification", "local")
+                result.setdefault("scoring", "local-backend")
+        return result
 
     @mcp.tool(name="leaderboard.status", annotations=READ_ONLY)
     def get_leaderboard_submission(submission_id: str) -> dict[str, Any]:

@@ -24,6 +24,14 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from ..access import (
+    HOSTED_FREE_MAX_CAMPAIGN_RUNS,
+    MODE_HOSTED,
+    TIER_PRO,
+    account_tier,
+    client_mode,
+    tier_gate,
+)
 from ..client import McpToolError, NimbusClient
 from ..setup_mode import SetupRequired
 from ._annotations import MUTATING, READ_ONLY
@@ -202,6 +210,114 @@ class Experiments:
 
 
 EXPERIMENTS = Experiments()
+
+
+def _persist_experiment_to_server(client: NimbusClient, payload: dict[str, Any]) -> None:
+    """Best-effort write-through of the snapshot to the backend record
+    (#518). NEVER raises: the local registry/disk stay the fast path, and a
+    backend outage must not fail or stall the experiment — the record is
+    simply absent server-side until the next successful write-through
+    (completion writes again, so a start-time outage self-heals)."""
+    exp_id = payload.get("experimentId")
+    if not isinstance(exp_id, str) or not exp_id:
+        return
+    execution_ids = [
+        row.get("executionId")
+        for row in payload.get("runs") or []
+        if isinstance(row, dict) and row.get("executionId")
+    ]
+    try:
+        client.put(
+            f"/api/experiments/{exp_id}",
+            json={
+                "status": payload.get("status") or "running",
+                "executionIds": execution_ids,
+                "payload": payload,
+            },
+        )
+    except Exception as err:  # noqa: BLE001 — best-effort by design (see docstring)
+        logger.warning("Could not persist experiment %s to the server: %s", exp_id, err)
+
+
+def _refresh_server_snapshot(snapshot: dict[str, Any], client: NimbusClient) -> dict[str, Any]:
+    """Bring a server-stored snapshot up to date from its executions.
+
+    The stored payload is refreshed when its origin process finalizes; if
+    that process died mid-run (or has not finalized yet), the executions
+    themselves are server-side, so their live summaries/results are the
+    truth. Rows without an executionId were never submitted by the origin
+    and cannot be driven from here (the payload carries no train graphs) —
+    they stay non-terminal and the experiment stays "running".
+    """
+    rows = snapshot.get("runs")
+    if not isinstance(rows, list) or snapshot.get("status") in _TERMINAL:
+        return snapshot
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") in _TERMINAL:
+            continue
+        exec_id = row.get("executionId")
+        if not exec_id:
+            continue
+        try:
+            summary = _poll_summary(exec_id, client).get("summary") or {}
+        except McpToolError:
+            continue
+        status = summary.get("status")
+        if status == "completed":
+            metrics = _fetch_metrics(exec_id, client)
+            if metrics is None:
+                row["status"] = "failed"
+                row["error"] = f"run completed but result fetch failed for {exec_id}"
+            else:
+                row["status"] = "completed"
+                row["metrics"] = metrics
+            changed = True
+        elif status in _TERMINAL:  # failed | cancelled
+            row["status"] = "failed"
+            row["error"] = summary.get("errorMessage") or f"terminal status: {status}"
+            changed = True
+    if changed and all(
+        isinstance(row, dict) and row.get("status") in _TERMINAL for row in rows
+    ):
+        run_rows = [
+            RunRow(
+                name=str(row.get("name") or ""),
+                train_graph={},
+                execution_id=row.get("executionId"),
+                status=str(row.get("status") or "pending"),
+                error=row.get("error"),
+                metrics=row.get("metrics"),
+            )
+            for row in rows
+        ]
+        snapshot["aggregates"] = _compute_aggregates(run_rows)
+        snapshot["status"] = (
+            "failed" if all(row.status == "failed" for row in run_rows) else "completed"
+        )
+        _persist_experiment_to_server(client, snapshot)
+    return snapshot
+
+
+def _fetch_server_experiment(client: NimbusClient, exp_id: str) -> dict[str, Any] | None:
+    """Read-fallback: the backend experiment record's payload, refreshed.
+
+    None on any miss — unknown id, another owner's id (the backend 404s
+    both identically), or the backend being unreachable. SetupRequired
+    propagates: in setup mode no experiment can exist and the caller wants
+    the guidance, not an "unknown" error.
+    """
+    try:
+        body = client.get(f"/api/experiments/{exp_id}")
+    except SetupRequired:
+        raise
+    except Exception:  # noqa: BLE001 — a failed lookup is a miss, handled by the caller
+        return None
+    record = body.get("record") if isinstance(body, dict) else None
+    payload = record.get("payload") if isinstance(record, dict) else None
+    if not isinstance(payload, dict) or payload.get("experimentId") != exp_id:
+        return None
+    return _refresh_server_snapshot(payload, client)
 
 
 def _submit_run(run: RunRow, client: NimbusClient) -> None:
@@ -754,6 +870,7 @@ def _experiment_worker(
                     "failed" if all(run.status == "failed" for run in state.runs) else "completed"
                 )
             EXPERIMENTS.persist(fingerprint, state)
+            _persist_experiment_to_server(client, state.payload())
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
@@ -764,6 +881,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         a time (min(max_concurrent, 2)), retries queue-full up to 3 times per
         run, and polls each execution to completion. Poll experiment.get() for
         per-run status and, once finished, aggregated metrics.
+
+        PORTABILITY: the experiment record is written through to the
+        Nimbus server under your account (at start and at completion), so
+        experiment.get works from ANY entry point — local stdio, hosted
+        gateway, another machine — signed in with the same account/token.
+        If the server is unreachable when the experiment starts it still
+        runs and polls locally, but other entry points cannot read it
+        until a write-through succeeds (#518).
 
         Args:
             runs: 1-25 entries, each {name: str, train_graph: {nodes, connections}}
@@ -781,6 +906,29 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             raise McpToolError(
                 f"experiment.run accepts at most {MAX_RUNS} runs (got {len(runs)}). "
                 "Split the sweep into several experiments."
+            )
+        if (
+            len(runs) > HOSTED_FREE_MAX_CAMPAIGN_RUNS
+            and client_mode(client) == MODE_HOSTED
+            and account_tier(client) != TIER_PRO
+        ):
+            # X10 "big campaigns" are Pro on hosted. The plan gives no
+            # number; the conservative documented threshold is
+            # HOSTED_FREE_MAX_CAMPAIGN_RUNS (5) runs per experiment for
+            # free accounts (Pro keeps the full 25). Local backends: ungated.
+            return tier_gate(
+                "experiment.run",
+                current_tier=account_tier(client),
+                detail=(
+                    f"Hosted campaigns of more than {HOSTED_FREE_MAX_CAMPAIGN_RUNS} "
+                    f"runs are Pro (got {len(runs)}). Free accounts can run up to "
+                    f"{HOSTED_FREE_MAX_CAMPAIGN_RUNS} runs per experiment."
+                ),
+                local_alternative=(
+                    "Split the sweep into experiments of at most "
+                    f"{HOSTED_FREE_MAX_CAMPAIGN_RUNS} runs, or run it against the "
+                    "desktop app backend (local, ungated)."
+                ),
             )
         prepared: list[RunRow] = []
         for index, item in enumerate(runs):
@@ -818,6 +966,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # registry key). The id returned to the caller stays plain.
         fingerprint = client.credential_fingerprint()
         EXPERIMENTS.add(state, fingerprint)
+        # Write-through (#518): the record lands server-side NOW (status
+        # running, no executions yet) so another entry point can already
+        # resolve the id; the worker writes the terminal snapshot at
+        # finalize. Best-effort — a backend blip never fails the run.
+        _persist_experiment_to_server(client, state.payload())
         # Bind BEFORE spawning: the worker thread has no MCP request context
         # (fastmcp's header lookup answers {} there), so a request-scoped
         # client — the hosted gateway — cannot resolve its per-request token
@@ -834,7 +987,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "status": "running",
             "runs": [{"name": run.name, "executionId": None} for run in prepared],
             "pollHint": "Runs submit in the background. Call experiment.get(experiment_id) "
-            "until status is completed or failed.",
+            "until status is completed or failed — from any entry point signed in "
+            "with the same account; the record is stored on the Nimbus server.",
         }
 
     @mcp.tool(name="experiment.get", annotations=READ_ONLY)
@@ -849,6 +1003,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         None below 2 values. kindBreakdown is always present when aggregates
         exist (including single-kind experiments).
 
+        PORTABILITY: experiment records are stored on the Nimbus server
+        under your account, so any entry point (local stdio, hosted
+        gateway, another machine) signed in with the same account/token
+        can read them; the serving process and the local
+        ~/.nimbus/experiments store remain as fast-path caches.
+        Experiments run before server-side storage landed exist only in
+        the origin machine's local store and read as unknown elsewhere
+        (#518).
+
         Args:
             experiment_id: The experiment to inspect (from experiment.run).
         """
@@ -861,10 +1024,20 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # same id is indistinguishable from a foreign-process one.
         snapshot = EXPERIMENTS.snapshot(client.credential_fingerprint(), exp_id)
         if snapshot is None:
+            # Cross-entry-point read (#518): the backend record is the
+            # shared store; local memory/disk are only this process's cache.
+            snapshot = _fetch_server_experiment(client, exp_id)
+        if snapshot is None:
             raise McpToolError(
-                f"Unknown experiment '{exp_id}'. No in-memory or on-disk snapshot "
-                "was found for this credential (wrong id, different machine, or "
-                "the experiment never finished persisting)."
+                f"Unknown experiment '{exp_id}'. No record for this "
+                "account/token was found in this process, in this machine's "
+                "local experiment store, or on the Nimbus server. The id may "
+                "be wrong, may belong to a different account/token (foreign "
+                "ids read exactly like missing ones), or the experiment may "
+                "predate server-side experiment storage — those exist only "
+                "in the origin machine's local store. If it was just "
+                "started elsewhere, retry in a moment; otherwise re-run it "
+                "from an entry point signed in with the same account."
             )
         # Recompute kindBreakdown (and enrich unstamped legacy rows from
         # /api/result) so classification matches stats.grouped on the same ids.

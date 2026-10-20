@@ -95,12 +95,23 @@ Three ways to give the server a credential — tried in this order at startup:
    `NIMBUS_MCP_KEY` / `NIMBUS_MCP_KEY_FILE` (must match `MCP_LOCAL_KEY` on a
    local backend — see below). Explicit env always beats files on disk.
 
-**No credential anywhere?** The server still starts — in **setup mode**. Every
-tool call returns `{ok: false, setupRequired: true, message, options}` with the
-three paths above, so your agent walks you through onboarding instead of the
-server crashing. A hosted token rejected mid-session (expired or revoked)
-returns the same shape, including how many days ago it expired and a
-`nimbus-mcp login` first option.
+**No credential anywhere?** That is the **Local Free tier** — it works. The
+server starts anonymously against the local backend (desktop app or dev
+backend on `http://127.0.0.1:8080`): templates, your own data, local
+execution/plots/stats, BIDS export and local-only storage need **no Nimbus
+Studio login at all**. Login is requested only at first *cloud* value — a
+tool that needs an identity (leaderboard submission, verified/cross-machine
+experiment history, hosted compute, cloud sync, collaboration) returns
+`{ok: false, loginRequired: true, trigger, reason, howToAuthenticate}`
+naming exactly why, instead of a blanket gate. Hosted Pro features
+(verified leaderboard submissions, `foundation.compare`, big campaigns,
+team features) return `{ok: false, tierGate: true, requiredTier: "pro"}`
+on free accounts; exports (BIDS etc.) are never gated at any tier. If a
+local call fails because no local backend/identity exists, the response is
+the local-mode variant of `{ok: false, setupRequired: true, message,
+options}` (start the desktop app / set a dev key — still no login). A
+hosted token rejected mid-session (expired or revoked) returns the classic
+setup shape, including how many days ago it expired.
 
 ### Checking who you are
 
@@ -126,6 +137,20 @@ the terminal equivalent with a live backend probe.
   snapshotted at mint time — after an upgrade, re-login (or revoke and re-create
   the token) to pick up the new plan. An expired token surfaces as setup
   guidance with the day count, not a dead end.
+
+## Privacy & telemetry
+
+Local Free mode needs no account and phones home nothing by default.
+Anonymous, content-free usage telemetry (tool names, success/failure and
+error codes, duration buckets — never your data, file paths, or code) is
+**opt-in**: you are asked once in the first tool response of a fresh
+install, and `nimbus-mcp telemetry on|off|status` (or
+`NIMBUS_MCP_TELEMETRY=on|off`) controls it anytime. With telemetry off
+there are zero telemetry network calls, and everything local keeps
+working. Full statement: [PRIVACY.md](PRIVACY.md). A quiet PyPI version
+check at startup (cached 24 h, silent when current or offline) adds a
+one-time `versionNotice` to a tool response when your client is behind
+the hosted gateway's surface.
 
 ## Requirements (local mode)
 

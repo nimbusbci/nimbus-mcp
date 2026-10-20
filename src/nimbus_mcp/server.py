@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import time
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 
-from . import __version__
+from . import __version__, version_check
 from .client import NimbusClient, NullClient
 from .config import DEFAULT_SERVE_HOST, load_config
+from .product_telemetry import Telemetry, get_telemetry
 from .setup_mode import SetupRequired
 from .tools import (
     artifacts,
@@ -34,9 +37,16 @@ from .tools import (
 )
 
 INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
-0) Auth: account.whoami() shows the account, plan, quota, and (token mode) token expiry;
-   if a tool returns {ok: false, setupRequired: true}, walk the user through the
-   options in that payload (nimbus-mcp login / desktop app / NIMBUS_MCP_KEY).
+0) Auth: Local Free needs NO Nimbus Studio login — templates, own data, local
+   execution/plots/stats, BIDS export and local storage work anonymously against
+   the local backend (desktop app / dev backend). account.whoami() shows the mode,
+   account, plan, quota, and (token mode) token expiry. Login is requested ONLY at
+   first cloud value: a tool returning {ok: false, loginRequired: true, trigger}
+   names why and how to authenticate (nimbus-mcp login / NIMBUS_TOKEN) — surface
+   that, do not pre-emptively ask for credentials. {ok: false, tierGate: true}
+   means a hosted Pro feature on a free account. {ok: false, setupRequired: true}
+   now only appears when a credential was rejected or no local identity exists —
+   walk the user through the options in that payload.
 1) Explore: catalog.nodes / catalog.node_schema / catalog.templates /
    catalog.template / catalog.datasets;
    catalog.leaderboard ranks benchmark pipelines per dataset (meanAccuracyPct desc) — pick
@@ -114,18 +124,138 @@ class SetupGuidanceMiddleware(Middleware):
             raise
 
 
-def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
+def _access_mode_of(client: object) -> str:
+    """anonymous | local | hosted for telemetry props (duck-typed so this
+    works with the stdio client, NullClient, and the gateway wrapper)."""
+    mode = getattr(client, "access_mode", None)
+    if mode in ("anonymous", "local", "hosted"):
+        return str(mode)
+    config = getattr(client, "config", None)
+    if config is not None:
+        if getattr(config, "nimbus_token", None):
+            return "hosted"
+        if getattr(config, "mcp_key", None):
+            return "local"
+    return "anonymous"
+
+
+def _error_code_of(err: BaseException) -> str:
+    """Stable error CODE for telemetry — never the message text (X12)."""
+    seen: set[int] = set()
+    cur: BaseException | None = err
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        code = getattr(cur, "code", None)
+        if isinstance(code, str) and code:
+            return code
+        if isinstance(cur, SetupRequired):
+            return "setup_required"
+        cur = cur.__cause__ or cur.__context__
+    return "tool_error"
+
+
+class ProductTelemetryMiddleware(Middleware):
+    """X11/X12: per-call telemetry events + one-time consent/version notices.
+
+    Events are consent-gated inside :class:`Telemetry` (off = zero network
+    calls). Notices attach to the first eligible dict-shaped tool result:
+    the telemetry consent notice once per fresh install, and the version
+    drift notice once per process when the client is behind.
+    """
+
+    def __init__(self, telemetry: Telemetry, client: object) -> None:
+        self._telemetry = telemetry
+        self._mode = _access_mode_of(client)
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext,
+        call_next: CallNext,
+    ) -> ToolResult:
+        tool = str(getattr(getattr(context, "message", None), "name", "") or "unknown")
+        started = time.monotonic()
+        try:
+            result = await call_next(context)
+        except Exception as err:
+            self._telemetry.tool_completed(
+                tool=tool,
+                mode=self._mode,
+                success=False,
+                error_code=_error_code_of(err),
+                duration_s=time.monotonic() - started,
+            )
+            raise
+        structured = result.structured_content
+        success = True
+        error_code: str | None = None
+        if isinstance(structured, dict):
+            if structured.get("loginRequired"):
+                success, error_code = False, "login_required"
+                self._telemetry.login_prompt_shown(
+                    trigger=str(structured.get("trigger") or "unknown"),
+                    mode=self._mode,
+                )
+            elif structured.get("tierGate"):
+                success, error_code = False, "tier_gate"
+            elif structured.get("setupRequired"):
+                success, error_code = False, "setup_required"
+            elif structured.get("ok") is False:
+                success = False
+                code = structured.get("code")
+                error_code = str(code) if isinstance(code, str) and code else "ok_false"
+        self._telemetry.tool_completed(
+            tool=tool,
+            mode=self._mode,
+            success=success,
+            error_code=error_code,
+            duration_s=time.monotonic() - started,
+        )
+        if isinstance(structured, dict):
+            extra: dict = {}
+            notice = self._telemetry.pending_notice()
+            if notice is not None:
+                extra["telemetryNotice"] = notice
+            drift = version_check.pending_notice()
+            if drift is not None:
+                extra["versionNotice"] = drift
+                self._telemetry.version_drift_warned(
+                    current=str(drift.get("current")),
+                    latest=str(drift.get("latest")),
+                    mode=self._mode,
+                )
+            if extra:
+                return ToolResult(
+                    content=result.content,
+                    structured_content={**structured, **extra},
+                )
+        return result
+
+
+def build_server(
+    client: NimbusClient | NullClient | None = None,
+    *,
+    product_telemetry: Telemetry | None = None,
+) -> FastMCP:
     if client is None:
         config = load_config()
-        client = (
-            NimbusClient(config)
-            if (config.mcp_key or config.nimbus_token)
-            else NullClient(config)  # setup mode: every tool returns guidance
-        )
+        # Local Free tier (plan X9): no credential -> an anonymous client
+        # against the local backend, NOT a setup-mode stand-in. Tools run;
+        # cloud-only features answer with a structured login prompt at the
+        # moment they need an account (access.py).
+        client = NimbusClient(config)
     # version= so the initialize handshake (serverInfo.version) reports THIS
     # package's version — FastMCP defaults to advertising its own.
     mcp = FastMCP("nimbus", version=__version__, instructions=INSTRUCTIONS)
     mcp.add_middleware(SetupGuidanceMiddleware())
+    if product_telemetry is None:
+        # The hosted gateway has no install identity and must not attach
+        # per-install consent notices to other people's sessions.
+        product_telemetry = (
+            Telemetry.disabled()
+            if type(client).__name__ == "HeaderCredentialClient"
+            else get_telemetry()
+        )
+    mcp.add_middleware(ProductTelemetryMiddleware(product_telemetry, client))
     for module in (
         whoami,
         discovery,
@@ -152,6 +282,7 @@ def build_server(client: NimbusClient | NullClient | None = None) -> FastMCP:
 
 
 def main() -> None:
+    version_check.start_background_check()  # non-blocking; silent offline
     build_server().run()  # stdio transport
 
 
@@ -173,4 +304,6 @@ def serve(host: str = DEFAULT_SERVE_HOST, port: int = 8080, path: str = "/mcp") 
     init_gateway_sentry()
 
     client = HeaderCredentialClient(load_config())
-    build_server(client).run(transport="http", host=host, port=port, path=path)
+    build_server(client, product_telemetry=Telemetry.disabled()).run(
+        transport="http", host=host, port=port, path=path
+    )

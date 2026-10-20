@@ -48,7 +48,7 @@ TTL_DAYS_MAX = 90
 # Overall login give-up bound: the grant TTL plus slack for one slow poll.
 LOGIN_TIMEOUT_SLACK_SECONDS = 120
 
-_KNOWN_COMMANDS = ("login", "logout", "status", "serve")
+_KNOWN_COMMANDS = ("login", "logout", "status", "serve", "telemetry")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -69,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return cmd_logout(args)
     if args.command == "serve":
         return cmd_serve(args)
+    if args.command == "telemetry":
+        return cmd_telemetry(args)
     return cmd_status(args)
 
 
@@ -97,6 +99,34 @@ def cmd_serve(args: argparse.Namespace) -> int:
         port=port if port is not None else 8080,
         path=path or "/mcp",
     )
+    return 0
+
+
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    """Consent control for product telemetry (plan X11/X12, PRIVACY.md)."""
+    from .product_telemetry import get_telemetry
+
+    telemetry = get_telemetry()
+    env = os.environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower()
+    if args.action in ("on", "off"):
+        telemetry.set_consent(args.action == "on")
+        effective = telemetry.consent()
+        print(f"Stored telemetry choice: {args.action}.")
+        if env in ("on", "off") and env != args.action:
+            print(
+                f"Note: NIMBUS_MCP_TELEMETRY={env} is set and overrides it - "
+                f"telemetry is effectively {'ON' if effective == 'granted' else 'OFF'}."
+            )
+        elif effective == "granted":
+            print("Telemetry ON: anonymous, content-free usage events (mcp_* in PostHog).")
+            print("Revoke anytime: nimbus-mcp telemetry off")
+        else:
+            print("Telemetry OFF: zero telemetry network calls.")
+        return 0
+    env = os.environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower()
+    print(f"consent: {telemetry.consent()}" + (f" (env NIMBUS_MCP_TELEMETRY={env})" if env else ""))
+    print(f"capture host: {telemetry._host()}")
+    print(f"project key configured: {bool(telemetry._api_key())}")
     return 0
 
 
@@ -138,6 +168,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--name", default=None, metavar="NAME", help="display name for the minted token"
     )
     sub.add_parser("logout", help="remove the stored credential")
+    telemetry = sub.add_parser(
+        "telemetry", help="show or change anonymous usage-telemetry consent"
+    )
+    telemetry.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=("on", "off", "status"),
+        help="on = opt in, off = opt out (default: status)",
+    )
     sub.add_parser("status", help="show credential source and probe the backend")
     serve = sub.add_parser(
         "serve",
@@ -269,6 +309,11 @@ def _finish_login(api_url: str, poll: dict[str, Any]) -> int:
     if expires_at:
         print(f"Token expires {expires_at}.")
     print(f"Credential saved to {path} (0600). Run nimbus-mcp status to verify.")
+    # X12: identity event — consent-gated inside capture (no-op unless the
+    # user opted in); the install UUID stays unlinked to the account.
+    from .product_telemetry import get_telemetry
+
+    get_telemetry().login_completed(trigger="cli_login")
     return 0
 
 

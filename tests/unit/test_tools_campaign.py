@@ -70,6 +70,9 @@ class FakeBackend:
         self.execute_attempts = 0
         self.summary_attempts = 0
         self.queue_full_ids: set[str] = set()
+        # #518 server-side experiment records: id -> (owner key, PUT body).
+        self.experiments: dict[str, tuple[str, dict]] = {}
+        self.experiments_down = False
 
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
@@ -116,6 +119,48 @@ class FakeBackend:
             return httpx.Response(
                 200, json={"summary": {"executionId": exec_id, "status": "completed"}}
             )
+        if path.startswith("/api/experiments/"):
+            if self.experiments_down:
+                return httpx.Response(500, json={"detail": "experiments store down"})
+            exp_id = path.split("/")[3]
+            owner = req.headers.get("authorization") or req.headers.get("x-mcp-key") or "anon"
+            if req.method == "PUT":
+                body = json.loads(req.content)
+                existing = self.experiments.get(exp_id)
+                if existing is not None and existing[0] != owner:
+                    return httpx.Response(
+                        404,
+                        json={"code": "nimbus.experiment.not_found",
+                              "detail": "Experiment not found"},
+                    )
+                self.experiments[exp_id] = (owner, body)
+                return httpx.Response(
+                    200,
+                    json={"ok": True, "record": {
+                        "experimentId": exp_id,
+                        "status": body.get("status"),
+                        "executionIds": body.get("executionIds") or [],
+                        "payload": body.get("payload"),
+                    }},
+                )
+            if req.method == "GET":
+                found = self.experiments.get(exp_id)
+                if found is None or found[0] != owner:
+                    return httpx.Response(
+                        404,
+                        json={"code": "nimbus.experiment.not_found",
+                              "detail": "Experiment not found"},
+                    )
+                body = found[1]
+                return httpx.Response(
+                    200,
+                    json={"ok": True, "record": {
+                        "experimentId": exp_id,
+                        "status": body.get("status"),
+                        "executionIds": body.get("executionIds") or [],
+                        "payload": body.get("payload"),
+                    }},
+                )
         if path.startswith("/api/result/"):
             exec_id = path.split("/")[3]
             if exec_id in self.result_fail:
@@ -884,3 +929,121 @@ def test_experiments_registry_never_evicts_when_all_running():
         reg.add(campaign.ExperimentState(f"r{i}", [], max_in_flight=1), fingerprint="fp")
     assert len(reg._states) == campaign.MAX_EXPERIMENTS + 4
     assert reg.snapshot("fp", "r0") is not None
+
+
+# ── #518: server-side experiment records (write-through / read-fallback) ──
+
+
+def _token_server(backend: FakeBackend, token: str) -> FastMCP:
+    client = NimbusClient(
+        McpConfig(api_url="http://t", mcp_key="", export_dir=None, nimbus_token=token),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(backend.handler),
+    )
+    server = FastMCP("t")
+    campaign.register(server, client)
+    return server
+
+
+def _fresh_local_state(monkeypatch, tmp_path) -> None:
+    """Simulate a different process/machine: empty registry, empty disk."""
+    monkeypatch.setattr(campaign, "EXPERIMENTS", campaign.Experiments())
+    monkeypatch.setattr(
+        campaign, "_experiment_disk_dir", lambda fingerprint: tmp_path / "elsewhere"
+    )
+
+
+async def test_run_experiment_writes_through_to_server(monkeypatch):
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+    async with Client(make_server(backend)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        exp_id = result.data["experimentId"]
+        await wait_for_terminal(c, exp_id)
+    assert exp_id in backend.experiments
+    _owner, body = backend.experiments[exp_id]
+    assert body["status"] == "completed"
+    assert body["executionIds"] == ["exec_1"]
+    assert body["payload"]["aggregates"]["kappa"]["n"] == 1
+
+
+async def test_get_experiment_falls_back_to_server_record(monkeypatch, tmp_path):
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"accuracyPct": 61.5}})
+    server = _token_server(backend, "tok-a")
+    async with Client(server) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        exp_id = result.data["experimentId"]
+        await wait_for_terminal(c, exp_id)
+        _fresh_local_state(monkeypatch, tmp_path)  # another process/machine
+        snapshot = await c.call_tool("experiment.get", {"experiment_id": exp_id})
+    assert snapshot.data["status"] == "completed"
+    assert snapshot.data["aggregates"]["accuracyPct"]["mean"] == 61.5
+
+
+async def test_get_experiment_refreshes_unfinished_server_record(monkeypatch, tmp_path):
+    # Origin process died after submitting but before finalizing: the stored
+    # payload still says running; the executions themselves are the truth.
+    backend = FakeBackend(metrics={"exec_1": {"accuracyPct": 55.0}})
+    backend.experiments["expseeded"] = (
+        "Bearer tok-a",
+        {
+            "status": "running",
+            "executionIds": ["exec_1"],
+            "payload": {
+                "experimentId": "expseeded",
+                "status": "running",
+                "runs": [{"name": "r1", "executionId": "exec_1", "status": "running"}],
+            },
+        },
+    )
+    _fresh_local_state(monkeypatch, tmp_path)
+    async with Client(_token_server(backend, "tok-a")) as c:
+        snapshot = await c.call_tool("experiment.get", {"experiment_id": "expseeded"})
+    assert snapshot.data["status"] == "completed"
+    assert snapshot.data["runs"][0]["status"] == "completed"
+    assert snapshot.data["aggregates"]["accuracyPct"]["mean"] == 55.0
+
+
+async def test_get_experiment_backend_down_is_honest_unknown(monkeypatch, tmp_path):
+    backend = FakeBackend()
+    backend.experiments_down = True
+    _fresh_local_state(monkeypatch, tmp_path)
+    async with Client(_token_server(backend, "tok-a")) as c:
+        with pytest.raises(Exception, match="Unknown experiment"):
+            await c.call_tool("experiment.get", {"experiment_id": "nope"})
+
+
+async def test_run_experiment_survives_backend_down(monkeypatch):
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.25}})
+    backend.experiments_down = True
+    async with Client(make_server(backend)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        snapshot = await wait_for_terminal(c, result.data["experimentId"])
+    assert snapshot.data["status"] == "completed"  # local path unaffected
+    assert backend.experiments == {}  # nothing could be written through
+
+
+async def test_get_experiment_cross_owner_server_record_not_visible(monkeypatch, tmp_path):
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+    server_a = _token_server(backend, "tok-a")
+    async with Client(server_a) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        exp_id = result.data["experimentId"]
+        await wait_for_terminal(c, exp_id)
+    _fresh_local_state(monkeypatch, tmp_path)
+    async with Client(_token_server(backend, "tok-b")) as c:
+        with pytest.raises(Exception, match="Unknown experiment"):
+            await c.call_tool("experiment.get", {"experiment_id": exp_id})
+    async with Client(server_a) as c:
+        snapshot = await c.call_tool("experiment.get", {"experiment_id": exp_id})
+    assert snapshot.data["status"] == "completed"

@@ -71,10 +71,13 @@ def test_key_mode_sends_mcp_key_and_no_bearer():
     assert seen["auth"] is None
 
 
-def test_missing_key_raises_actionable_error():
+def test_missing_key_is_anonymous_local_free_not_an_error():
+    # X9: no credential constructs an anonymous Local Free client (the old
+    # behaviour raised and forced the setup-mode stand-in for every tool).
     cfg = McpConfig(api_url="http://test", mcp_key="", export_dir=Path("/tmp/nx"))
-    with pytest.raises(McpToolError, match="NIMBUS_MCP_KEY"):
-        NimbusClient(cfg)
+    client = NimbusClient(cfg)
+    assert client.access_mode == "anonymous"
+    assert client.credential_fingerprint() == "anon"
 
 
 def test_401_raises_auth_hint():

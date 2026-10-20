@@ -19,6 +19,7 @@ __all__ = [
     "SETUP_OPTIONS",
     "SETUP_MESSAGE",
     "SetupRequired",
+    "local_mode_guidance",
     "setup_guidance",
     "token_rejected_guidance",
 ]
@@ -71,6 +72,40 @@ def setup_guidance(message: str | None = None, **extra: Any) -> dict[str, Any]:
         "options": [dict(option) for option in SETUP_OPTIONS],
     }
     guidance.update(extra)
+    return guidance
+
+
+def local_mode_guidance(status: int | None = 401) -> dict[str, Any]:
+    """Guidance when an ANONYMOUS local call is rejected by the local backend.
+
+    Local Free (plan X9) needs no Nimbus Studio login: the missing piece is
+    a local identity (the desktop app's auto-discovered key, or a dev
+    backend key), never an account. This is the local-mode default the old
+    blanket setup response becomes — returned only when a call actually
+    fails, not as a pre-emptive gate on every tool.
+    """
+    if status is None:
+        detail = "could not be reached at all (it is not running)"
+    else:
+        detail = f"rejected this request (HTTP {status})"
+    guidance = setup_guidance(
+        message=(
+            f"The local Nimbus backend {detail} "
+            "and no local identity was presented. No Nimbus Studio login "
+            "is needed for local work: start the Nimbus Studio desktop app "
+            "(its local key is auto-discovered), or set NIMBUS_MCP_KEY to the "
+            "local backend's MCP_LOCAL_KEY for a dev backend. Logging in "
+            "(`nimbus-mcp login`) is only needed for cloud features "
+            "(leaderboard, verified history, hosted compute, sync)."
+        )
+    )
+    # Local options first; login is last and labelled cloud-only (X9).
+    options = guidance["options"]
+    local_first = [o for o in options if o["action"] != "nimbus-mcp login"]
+    login = [dict(o) for o in options if o["action"] == "nimbus-mcp login"]
+    for o in login:
+        o["detail"] = "Only for cloud features (not needed locally). " + o["detail"]
+    guidance["options"] = local_first + login
     return guidance
 
 

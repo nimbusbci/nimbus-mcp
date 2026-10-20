@@ -74,11 +74,13 @@ def assert_is_guidance(data: dict) -> None:
     assert data["setupRequired"] is True
     assert "nimbus-mcp login" in data["message"]
     actions = [option["action"] for option in data["options"]]
-    assert actions == [
+    # Anonymous local-mode guidance reorders options (login last, X9);
+    # the option SET is the contract here.
+    assert sorted(actions) == sorted([
         "nimbus-mcp login",
         "start the Nimbus Studio desktop app",
         "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
-    ]
+    ])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,10 +88,16 @@ def assert_is_guidance(data: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-async def test_setup_mode_guidance_from_three_tool_families():
-    """catalog.templates (discovery), execution.run (run), device.list (live) —
-    no HTTP happens; each call returns the structured guidance dict."""
-    server = build_server()  # isolated env resolves nothing → NullClient
+async def test_setup_mode_guidance_from_three_tool_families(monkeypatch):
+    """X9 Local Free: no credential -> anonymous client (not NullClient).
+
+    With no local backend running, backend-bound tools return the LOCAL-mode
+    guidance dict (no login demanded); account.whoami answers locally with
+    the anonymous mode/tier instead of any guidance. The API URL is pointed
+    at a dead port so the test stays hermetic on machines where a real
+    local backend happens to run."""
+    monkeypatch.setenv("NIMBUS_API_URL", "http://127.0.0.1:9")
+    server = build_server()  # isolated env resolves nothing -> anonymous
     async with Client(server) as c:
         tools = {tool.name for tool in (await c.list_tools())}
     assert "account.whoami" in tools  # every tool is registered in setup mode
@@ -100,15 +108,20 @@ async def test_setup_mode_guidance_from_three_tool_families():
             ("catalog.templates", {}),
             ("execution.run", {"train_graph": TRAIN_GRAPH}),
             ("device.list", {}),
-            ("account.whoami", {}),
         ):
             result = await c.call_tool(name, args)
             assert not result.is_error
-            assert_is_guidance(result.data)
-            # the default (no-credential) message names all three paths
-            assert "NIMBUS_TOKEN" in result.data["message"]
-            assert "NIMBUS_MCP_KEY" in result.data["message"]
-            assert "desktop app" in result.data["message"]
+            data = result.data
+            assert data["ok"] is False and data["setupRequired"] is True
+            # local flavour: no login is demanded for local work
+            assert "No Nimbus Studio login" in data["message"]
+            assert "desktop app" in data["message"]
+        who = await c.call_tool("account.whoami", {})
+        assert not who.is_error
+        assert who.data["authenticated"] is False
+        assert who.data["mode"] == "local"
+        assert who.data["tier"] == "local-free"
+        assert who.data["loginRequired"] is False
 
 
 def test_null_client_every_method_raises_setup_required():
@@ -132,7 +145,7 @@ def test_null_client_every_method_raises_setup_required():
     assert null.config.export_dir  # real config: tool code touching config works
 
 
-async def test_setup_mode_experiment_tools_preflight_before_worker():
+async def test_setup_mode_experiment_tools_preflight_before_worker(monkeypatch):
     """experiment.run preflights the credential BEFORE registering state or
     spawning the worker thread — the worker's catch-all would otherwise
     swallow SetupRequired into per-run errors and the tool would answer a
@@ -141,8 +154,9 @@ async def test_setup_mode_experiment_tools_preflight_before_worker():
     confusing "Unknown experiment" error."""
     from nimbus_mcp.tools import campaign
 
+    monkeypatch.setenv("NIMBUS_API_URL", "http://127.0.0.1:9")
     before = set(campaign.EXPERIMENTS._states)
-    server = build_server()  # isolated env resolves nothing → NullClient
+    server = build_server()  # isolated env -> anonymous; backend unreachable
     async with Client(server) as c:
         result = await c.call_tool(
             "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}

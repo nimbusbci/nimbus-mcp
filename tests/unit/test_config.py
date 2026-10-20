@@ -114,14 +114,14 @@ def test_token_only_without_any_key():
     assert cfg.mcp_key == ""
 
 
-def test_neither_token_nor_key_lists_both_options():
+def test_neither_token_nor_key_is_local_free_anonymous():
+    # X9: neither credential -> anonymous Local Free client, no raise. The
+    # login/key options now surface per-tool at first cloud value, not as a
+    # blanket construction failure.
     cfg = load_config(env={})
     assert cfg.nimbus_token == "" and cfg.mcp_key == ""
-    with pytest.raises(McpToolError) as excinfo:
-        NimbusClient(cfg)
-    msg = str(excinfo.value)
-    assert "NIMBUS_TOKEN" in msg
-    assert "NIMBUS_MCP_KEY" in msg
+    client = NimbusClient(cfg)
+    assert client.access_mode == "anonymous"
 
 
 # ── v0.5 additions ───────────────────────────────────────────────────────────

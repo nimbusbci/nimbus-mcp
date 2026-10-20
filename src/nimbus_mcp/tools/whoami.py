@@ -9,6 +9,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from ..access import MODE_ANONYMOUS, client_mode
 from ..client import NimbusClient
 from ..credentials import decode_token_claims
 from ._annotations import READ_ONLY
@@ -43,7 +44,31 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """Who you are authenticated as: account email, plan (isPro / pioneer),
         this month's free-run quota, and — with a hosted token — the token name
         and days until it expires. Call this first when setup guidance appears
-        or to check which credential a session uses."""
+        or to check which credential a session uses. In anonymous Local Free
+        mode there is no account: the response says so (mode/tier) instead of
+        demanding a login."""
+        if client_mode(client) == MODE_ANONYMOUS:
+            return {
+                "authenticated": False,
+                "mode": "local",
+                "tier": "local-free",
+                "userId": None,
+                "email": None,
+                "plan": {"isPro": False, "pioneerAccess": False},
+                "loginRequired": False,
+                "cloudFeaturesRequiringLogin": [
+                    "leaderboard.submit (identity)",
+                    "verified / cross-machine experiment history",
+                    "hosted compute and campaigns",
+                    "cloud sync / backup",
+                    "collaboration",
+                ],
+                "note": (
+                    "Local Free: templates, your own data, local execution, "
+                    "plots/stats, BIDS export and local-only storage work "
+                    "with no Nimbus Studio login."
+                ),
+            }
         profile = client.get("/api/me/profile")
         caps = profile.get("capabilities") or {}
         report = client.credential_report()

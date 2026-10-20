@@ -1,7 +1,10 @@
 """Hosted gateway: streamable-HTTP transport with per-request credentials.
 
-``nimbus-mcp serve`` runs the same 48 tools over streamable HTTP so remote
-MCP clients (and registries such as Smithery) can connect by URL. The
+``nimbus-mcp serve`` runs the same tools as the local stdio server (one
+shared :func:`~nimbus_mcp.server.build_server` assembly — the gateway has no
+tool definitions of its own; tests/unit/test_gateway_parity.py pins that)
+over streamable HTTP so remote MCP clients (and registries such as Smithery)
+can connect by URL. The
 gateway process itself holds NO credential: each request's Nimbus API token
 arrives as an MCP client header (``X-Nimbus-Token: nimb_…`` or
 ``Authorization: Bearer nimb_…`` — an Authorization-style ``Bearer ``
@@ -101,6 +104,11 @@ class _OwnedClientBinding(closing[NimbusClient]):
 
 
 class HeaderCredentialClient:
+    # The gateway is inherently account-based (per-request tokens): access
+    # mode is hosted, so X10 tier gates apply; there is no anonymous local
+    # mode here (documented difference from the stdio Local Free path).
+    access_mode = "hosted"
+
     """Request-scoped credential resolution over one shared config.
 
     Duck-types :class:`nimbus_mcp.client.NimbusClient` (the interface the

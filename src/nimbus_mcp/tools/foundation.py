@@ -17,6 +17,7 @@ from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
 from mcp.types import TextContent
 
+from ..access import MODE_HOSTED, TIER_PRO, account_tier, client_mode
 from ..client import McpToolError, NimbusClient
 from ._annotations import FIGURE_OUTPUT_SCHEMA, READ_ONLY
 
@@ -52,6 +53,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """
         if source not in _SOURCES:
             raise McpToolError(f"source must be one of {_SOURCES}; got {source!r}.")
+        if client_mode(client) == MODE_HOSTED and account_tier(client) != TIER_PRO:
+            # X10: hosted foundation.compare is a Pro feature. Local/desktop
+            # backends run it on the user's own machine and are NOT gated.
+            # (Raised, not returned: this tool's output schema is a figure.)
+            raise McpToolError(
+                "foundation.compare on the hosted backend is a Pro feature "
+                "(tier model X10) and this account is on the free tier. "
+                "Alternatives: run the same comparison against the Nimbus "
+                "Studio desktop app backend (local, ungated), pick a backbone "
+                "from catalog.leaderboard, or upgrade in Nimbus Studio -> "
+                "Account."
+            )
         payload = client.post(
             "/api/foundation/compare",
             json={
