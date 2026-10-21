@@ -10,6 +10,7 @@ import pytest
 
 from nimbus_mcp.credentials import (
     DEFAULT_API_URL,
+    HOSTED_API_URL,
     ResolvedCredential,
     credentials_store_path,
     decode_token_claims,
@@ -69,7 +70,8 @@ def test_env_token_wins_over_everything(tmp_path):
         home=tmp_path,
         platform="darwin",
     )
-    assert cred == ResolvedCredential("token", DEFAULT_API_URL, "nimb_env", {"source": "env"})
+    # Hosted token with NIMBUS_API_URL unset -> the hosted API, not loopback.
+    assert cred == ResolvedCredential("token", HOSTED_API_URL, "nimb_env", {"source": "env"})
 
 
 def test_token_file_beats_key_store_and_desktop(tmp_path):
@@ -616,3 +618,54 @@ def test_hosted_token_to_remote_api_url_allowed(tmp_path):
     )
     assert cred.kind == "token"
     assert cred.api_url == "https://api.example.com"
+
+
+# ── NIMBUS_TOKEN without NIMBUS_API_URL defaults to the hosted API ───────────
+
+
+def test_hosted_api_url_matches_gateway_fly_toml():
+    fly = (Path(__file__).resolve().parents[2] / "fly.toml").read_text()
+    assert f'NIMBUS_API_URL = "{HOSTED_API_URL}"' in fly
+
+
+def test_env_token_defaults_to_hosted_url(tmp_path):
+    cred = resolve_credential(env={"NIMBUS_TOKEN": "nimb_x"}, home=tmp_path, platform="darwin")
+    assert cred.kind == "token" and cred.api_url == HOSTED_API_URL
+
+
+def test_token_file_defaults_to_hosted_url(tmp_path):
+    token_file = _write_json(tmp_path / "token.json", {"token": "nimb_file"})
+    cred = resolve_credential(
+        env={"NIMBUS_TOKEN_FILE": str(token_file)}, home=tmp_path, platform="darwin"
+    )
+    assert cred.kind == "token" and cred.api_url == HOSTED_API_URL
+
+
+def test_explicit_api_url_always_wins_for_token(tmp_path):
+    for url in ("http://127.0.0.1:8080", "https://staging.example/"):
+        cred = resolve_credential(
+            env={"NIMBUS_TOKEN": "nimb_x", "NIMBUS_API_URL": url},
+            home=tmp_path,
+            platform="darwin",
+        )
+        assert cred.api_url == url.rstrip("/")
+
+
+def test_local_and_no_token_defaults_unchanged(tmp_path):
+    key = resolve_credential(env={"NIMBUS_MCP_KEY": "k"}, home=tmp_path, platform="darwin")
+    assert key.kind == "key" and key.api_url == DEFAULT_API_URL
+    none = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert none.kind == "none" and none.api_url == DEFAULT_API_URL
+
+
+def test_desktop_discovery_keeps_local_url(tmp_path):
+    _make_desktop_key(tmp_path, "darwin")
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "desktop_key"
+    assert cred.api_url.startswith("http://127.0.0.1:")
+
+
+def test_store_token_keeps_its_saved_url(tmp_path):
+    write_store(token="nimb_stored", api_url="http://127.0.0.1:8080", home=tmp_path)
+    cred = resolve_credential(env={}, home=tmp_path, platform="darwin")
+    assert cred.kind == "token" and cred.api_url == "http://127.0.0.1:8080"

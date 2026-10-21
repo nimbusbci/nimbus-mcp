@@ -37,6 +37,7 @@ from .credentials import (
     credentials_store_path,
     decode_token_claims,
     resolve_credential,
+    token_access_summary,
     write_store,
 )
 from .credentials import logout as remove_store
@@ -109,6 +110,9 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
     telemetry = get_telemetry()
     env = os.environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower()
     if args.action in ("on", "off"):
+        if args.action == "on" and env != "off" and telemetry._api_key():
+            # set_consent sends mcp_first_run inline (<= 2 s timeout).
+            print("Telemetry: sending first-run event…", flush=True)
         telemetry.set_consent(args.action == "on")
         effective = telemetry.consent()
         print(f"Stored telemetry choice: {args.action}.")
@@ -400,6 +404,14 @@ def _probe_profile(cred: ResolvedCredential, transport: httpx.BaseTransport | No
         days_left = max(0, math.ceil((exp - time.time()) / 86400))
         exp_iso = datetime.fromtimestamp(exp, timezone.utc).isoformat()
         print(f"token expires in {days_left} day(s) (exp {exp_iso})")
+    access = token_access_summary(claims)
+    if access:
+        scopes = (
+            "full access"
+            if access["fullAccess"]
+            else " ".join(access["scopes"] or []) or "none"
+        )
+        print(f"token kind: {access['kind']} · scopes: {scopes}")
     try:
         with httpx.Client(
             base_url=cred.api_url or DEFAULT_API_URL,

@@ -27,10 +27,13 @@ from fastmcp import FastMCP
 from ..access import (
     HOSTED_FREE_MAX_CAMPAIGN_RUNS,
     MODE_HOSTED,
+    MODE_LOCAL,
     TIER_PRO,
     account_tier,
     client_mode,
+    require_token_scope,
     tier_gate,
+    verify_hosted_credential,
 )
 from ..client import McpToolError, NimbusClient
 from ..setup_mode import SetupRequired
@@ -212,7 +215,9 @@ class Experiments:
 EXPERIMENTS = Experiments()
 
 
-def _persist_experiment_to_server(client: NimbusClient, payload: dict[str, Any]) -> None:
+def _persist_experiment_to_server(
+    client: NimbusClient, payload: dict[str, Any], *, fatal_if_unreachable: bool = False
+) -> None:
     """Best-effort write-through of the snapshot to the backend record
     (#518). NEVER raises: the local registry/disk stay the fast path, and a
     backend outage must not fail or stall the experiment — the record is
@@ -235,6 +240,14 @@ def _persist_experiment_to_server(client: NimbusClient, payload: dict[str, Any])
                 "payload": payload,
             },
         )
+    except McpToolError as err:
+        # A transport failure (no HTTP status) means the backend is down. In
+        # local/desktop-key mode that backend also runs the pipelines, so the
+        # caller asks for this to be fatal BEFORE an experiment id is handed
+        # out (N3): an honest error instead of a "running" id that can only fail.
+        if fatal_if_unreachable and getattr(err, "status_code", None) is None:
+            raise
+        logger.warning("Could not persist experiment %s to the server: %s", exp_id, err)
     except Exception as err:  # noqa: BLE001 — best-effort by design (see docstring)
         logger.warning("Could not persist experiment %s to the server: %s", exp_id, err)
 
@@ -900,6 +913,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # into per-run errors and the tool would answer a misleading
         # {status: "running"} instead of the setup guidance dict.
         client.ensure_ready()
+        # Hosted: a rejected token answers re-login guidance here, not a
+        # "running" experiment whose worker dies on 401 (B5). Cached per
+        # credential; experiment.get deliberately does NOT re-check.
+        hosted_profile = verify_hosted_credential(client)
+        # A valid but scoped token (e.g. a read-only CI key) would otherwise
+        # get {status: "running"} and fail in the worker on the backend's 403
+        # (N4). The worker PUTs /api/experiments/{id} and POSTs /api/execute,
+        # both of which need the 'run' scope.
+        require_token_scope(client, "run", "experiment.run (POST /api/execute)")
         if not runs:
             raise McpToolError("experiment.run needs at least 1 run (got 0).")
         if len(runs) > MAX_RUNS:
@@ -945,14 +967,21 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             )
         experiment_id = uuid.uuid4().hex
         compute_origin: dict[str, Any] | None = None
-        try:
-            profile = client.get("/api/me/profile")
-            origin = profile.get("computeOrigin") if isinstance(profile, dict) else None
+        if hosted_profile is not None:
+            # Hosted: reuse the profile the credential check just fetched (or
+            # cached) — one /api/me/profile per run start, zero on a cache hit.
+            origin = hosted_profile.get("computeOrigin")
             if isinstance(origin, dict):
                 compute_origin = origin
-        except (McpToolError, SetupRequired):
-            # Best-effort provenance stamp; never block experiment.start on profile blips.
-            pass
+        else:
+            try:
+                profile = client.get("/api/me/profile")
+                origin = profile.get("computeOrigin") if isinstance(profile, dict) else None
+                if isinstance(origin, dict):
+                    compute_origin = origin
+            except (McpToolError, SetupRequired):
+                # Best-effort provenance stamp; never block experiment.start on profile blips.
+                pass
         state = ExperimentState(
             experiment_id=experiment_id,
             runs=prepared,
@@ -965,12 +994,19 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # a per-request token in — it only mutates the state object, never the
         # registry key). The id returned to the caller stays plain.
         fingerprint = client.credential_fingerprint()
-        EXPERIMENTS.add(state, fingerprint)
         # Write-through (#518): the record lands server-side NOW (status
         # running, no executions yet) so another entry point can already
         # resolve the id; the worker writes the terminal snapshot at
-        # finalize. Best-effort — a backend blip never fails the run.
-        _persist_experiment_to_server(client, state.payload())
+        # finalize. Hosted: best-effort — a gateway blip never fails the run.
+        # Local/desktop key: the same backend executes the runs, so an
+        # unreachable backend is fatal here, before the id is registered or
+        # returned (N3). Local Free already fails in ensure_ready().
+        _persist_experiment_to_server(
+            client,
+            state.payload(),
+            fatal_if_unreachable=client_mode(client) == MODE_LOCAL,
+        )
+        EXPERIMENTS.add(state, fingerprint)
         # Bind BEFORE spawning: the worker thread has no MCP request context
         # (fastmcp's header lookup answers {} there), so a request-scoped
         # client — the hosted gateway — cannot resolve its per-request token

@@ -36,8 +36,10 @@ from .setup_mode import SetupRequired
 __all__ = [
     "HOSTED_SETUP_MESSAGE",
     "HOSTED_SETUP_OPTIONS",
+    "HOSTED_TOKEN_REJECTED_MESSAGE",
     "HeaderCredentialClient",
     "hosted_setup_guidance",
+    "hosted_token_rejected_guidance",
 ]
 
 HOSTED_SETUP_MESSAGE = (
@@ -65,6 +67,40 @@ HOSTED_SETUP_OPTIONS: list[dict[str, str]] = [
         "and its key is auto-discovered.",
     },
 ]
+
+
+HOSTED_TOKEN_REJECTED_MESSAGE = (
+    "This gateway received your Nimbus API token, but the Nimbus backend "
+    "rejected it (HTTP {status}){when}: it is expired, revoked, or was minted "
+    "for another environment. Mint a fresh token in Nimbus Studio → Account → "
+    "API tokens (or re-run `nimbus-mcp login` locally and copy the new "
+    "token), then replace the X-Nimbus-Token / Authorization header value in "
+    "this server's MCP client config."
+)
+
+
+def hosted_token_rejected_guidance(**extra: Any) -> dict[str, Any]:
+    """Gateway payload when a token WAS sent but the backend rejected it (B4)."""
+    status = extra.get("httpStatus") or 401
+    when = ""
+    if isinstance(extra.get("daysExpired"), int):
+        when = f", expired {extra['daysExpired']} day(s) ago"
+    guidance: dict[str, Any] = {
+        "ok": False,
+        "setupRequired": True,
+        "message": HOSTED_TOKEN_REJECTED_MESSAGE.format(status=status, when=when),
+        "options": [
+            {
+                "action": "mint a fresh token and update the header",
+                "detail": "Nimbus Studio → Account → API tokens → new token; "
+                'paste it as "X-Nimbus-Token": "nimb_…" (or '
+                '"Authorization": "Bearer nimb_…") in this mcpServers entry.',
+            },
+            dict(HOSTED_SETUP_OPTIONS[1]),
+        ],
+    }
+    guidance.update(extra)
+    return guidance
 
 
 def hosted_setup_guidance(**extra: Any) -> dict[str, Any]:
@@ -189,6 +225,14 @@ class HeaderCredentialClient:
         source = "header" if from_header else (self.config.credential_meta.get("source") or "env")
         return {"source": source, "token": _mask_secret(token) if token else None}
 
+    def current_token_claims(self) -> dict[str, Any]:
+        """Unverified claims of the token carrying THIS call (display only:
+        ``account.whoami`` shows kind/scopes/expiry). ``{}`` when none."""
+        from .credentials import decode_token_claims
+
+        token = self._current_token()
+        return decode_token_claims(token) if token else {}
+
     def credential_fingerprint(self) -> str:
         """Per-request counterpart of
         :meth:`nimbus_mcp.client.NimbusClient.credential_fingerprint`: the
@@ -250,14 +294,15 @@ class HeaderCredentialClient:
         stock guidance's fix (``nimbus-mcp login``) cannot update a remote
         client's header.
         """
-        guidance = hosted_setup_guidance(
-            **{
-                key: value
-                for key, value in err.guidance.items()
-                if key not in ("ok", "setupRequired", "message", "options")
-            }
-        )
-        return SetupRequired(guidance)
+        extras = {
+            key: value
+            for key, value in err.guidance.items()
+            if key not in ("ok", "setupRequired", "message", "options")
+        }
+        if extras.get("tokenRejected"):
+            # A token WAS sent and refused: "add the header" would be wrong (B4).
+            return SetupRequired(hosted_token_rejected_guidance(**extras))
+        return SetupRequired(hosted_setup_guidance(**extras))
 
     def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
         token = self._current_token()

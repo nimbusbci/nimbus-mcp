@@ -76,6 +76,15 @@ def assert_is_guidance(data: dict) -> None:
     actions = [option["action"] for option in data["options"]]
     # Anonymous local-mode guidance reorders options (login last, X9);
     # the option SET is the contract here.
+    if data.get("reason") == "local_backend_unreachable":
+        # L1: nothing answered locally → install / hosted / login / dev key.
+        assert actions == [
+            "install the Nimbus Studio desktop app",
+            "use the hosted gateway",
+            "nimbus-mcp login",
+            "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
+        ]
+        return
     assert sorted(actions) == sorted([
         "nimbus-mcp login",
         "start the Nimbus Studio desktop app",
@@ -114,12 +123,13 @@ async def test_setup_mode_guidance_from_three_tool_families(monkeypatch):
             data = result.data
             assert data["ok"] is False and data["setupRequired"] is True
             # local flavour: no login is demanded for local work
-            assert "No Nimbus Studio login" in data["message"]
+            assert "no login needed" in data["message"]
+            assert data["reason"] == "local_backend_unreachable"
             assert "desktop app" in data["message"]
         who = await c.call_tool("account.whoami", {})
         assert not who.is_error
         assert who.data["authenticated"] is False
-        assert who.data["mode"] == "local"
+        assert who.data["mode"] == "anonymous"
         assert who.data["tier"] == "local-free"
         assert who.data["loginRequired"] is False
 

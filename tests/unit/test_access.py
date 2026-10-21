@@ -18,6 +18,7 @@ from fastmcp import Client
 from nimbus_mcp import access
 from nimbus_mcp.access import (
     LOGIN_TRIGGERS,
+    TierUnverifiable,
     account_tier,
     client_mode,
     login_prompt,
@@ -349,7 +350,7 @@ async def test_expired_token_gets_relogin_not_upgrade(tmp_path):
     assert "tierGate" not in result.data
 
 
-def test_profile_failure_fails_closed_and_is_not_cached(tmp_path):
+def test_profile_failure_is_unverifiable_and_not_cached(tmp_path):
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -359,8 +360,59 @@ def test_profile_failure_fails_closed_and_is_not_cached(tmp_path):
         return httpx.Response(200, json={"capabilities": {"isPro": True}})
 
     client = _client(tmp_path, handler, token="t")
-    assert account_tier(client) == "account-free"
+    with pytest.raises(TierUnverifiable) as exc:
+        account_tier(client)
+    assert exc.value.code == "tier_unverifiable"
+    assert "not a plan limit" in str(exc.value)
     assert account_tier(client) == "pro"
+
+
+def test_unreachable_backend_is_unverifiable_not_free(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    client = _client(tmp_path, handler, token="t")
+    with pytest.raises(TierUnverifiable):
+        account_tier(client)
+
+
+def test_profile_without_capabilities_is_unverifiable(tmp_path):
+    client = _client(tmp_path, lambda r: httpx.Response(200, json={"id": "u"}), token="t")
+    with pytest.raises(TierUnverifiable):
+        account_tier(client)
+
+
+def _unreachable(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("refused", request=request)
+
+
+async def test_leaderboard_submit_unreachable_backend_no_upgrade_nag(tmp_path):
+    server = build_server(_client(tmp_path, _unreachable, token="t"))
+    async with Client(server) as c:
+        result = await c.call_tool(
+            "leaderboard.submit",
+            {"dataset_id": "BNCI2014_001", "name": "m", "code": "class M: pass"},
+            raise_on_error=False,
+        )
+    text = " ".join(getattr(b, "text", "") for b in result.content)
+    data = result.structured_content or {}
+    assert not data.get("tierGate")
+    assert "Upgrade" not in text and "free tier" not in text
+    assert "Cannot verify your Nimbus plan" in text
+
+
+async def test_foundation_compare_unreachable_backend_no_upgrade_nag(tmp_path):
+    server = build_server(_client(tmp_path, _unreachable, token="t"))
+    async with Client(server) as c:
+        result = await c.call_tool(
+            "foundation.compare",
+            {"source": "dataset", "dataset": "BNCI2014_001", "subject": "1"},
+            raise_on_error=False,
+        )
+    text = " ".join(getattr(b, "text", "") for b in result.content)
+    assert result.is_error
+    assert "free tier" not in text
+    assert "Cannot verify your Nimbus plan" in text
 
 
 GRAPH = {
@@ -400,6 +452,10 @@ async def test_local_big_campaign_is_not_tier_gated(tmp_path):
 def test_anonymous_guidance_does_not_lead_with_login():
     from nimbus_mcp.setup_mode import local_mode_guidance
 
-    actions = [o["action"] for o in local_mode_guidance(None)["options"]]
+    actions = [o["action"] for o in local_mode_guidance(401)["options"]]
     assert actions[0] != "nimbus-mcp login"
     assert actions[-1] == "nimbus-mcp login"
+    # Unreachable (no desktop app): install first, login never first (L1).
+    actions = [o["action"] for o in local_mode_guidance(None)["options"]]
+    assert actions[0] == "install the Nimbus Studio desktop app"
+    assert actions[0] != "nimbus-mcp login"

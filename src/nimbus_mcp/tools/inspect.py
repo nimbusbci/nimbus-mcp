@@ -9,17 +9,24 @@ what the numbers were computed from.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
+from ..errors import local_tool_error
 from ._annotations import READ_ONLY
 
 # Backend error code for "local paths are not trusted on this deployment"
 # (api_codes.DATA_DESCRIBE_LOCAL_FORBIDDEN): flat RFC7807 body, top-level code.
 _LOCAL_FORBIDDEN_CODE = "nimbus.data.describe_local_forbidden"
+
+# Plain-text formats carry no sampling rate; the backend refuses to guess.
+_RATELESS_EXTENSIONS = (".csv", ".tsv", ".txt")
+SAMPLING_RATE_REQUIRED_CODE = "nimbus.mcp.sampling_rate_required"
+SAMPLING_RATE_INVALID_CODE = "nimbus.mcp.sampling_rate_invalid"
 
 _HOSTED_LOCAL_MESSAGE = (
     "This Nimbus backend is hosted, so it does not open local filesystem "
@@ -78,7 +85,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         return client.get("/api/data/describe", params=params)
 
     @mcp.tool(name="data.inspect_file", annotations=READ_ONLY)
-    def inspect_file(path: str) -> dict[str, Any]:
+    def inspect_file(path: str, sampling_rate: float | None = None) -> dict[str, Any]:
         """Exploratory summary of an EEG file (.edf/.bdf/.mat/.csv/.tsv/.txt/.h5):
         channels, sampling rate, trial/class balance, per-channel µV stats,
         band powers and a PSD overview.
@@ -96,10 +103,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         hosted backend absolute paths are refused and this returns guidance
         (upload the file first or switch to a local backend).
 
+        CSV/TSV/TXT files have no embedded sampling rate: pass sampling_rate
+        (Hz) for them — the backend never assumes 250 Hz. Formats that embed
+        their rate (EDF/BDF/MAT/H5) ignore it.
+
         Args:
             path: ABSOLUTE filesystem path (`~` is expanded; local backends
                 only) or the RELATIVE upload path returned by data.upload
                 (works on any backend).
+            sampling_rate: Hz for CSV/TSV/TXT files (REQUIRED there, e.g. 250.0).
         """
         # One expansion used for BOTH the classification and the wire: the
         # backend's local resolver demands an absolute path, and a raw "~/…"
@@ -107,8 +119,26 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # file that exists (same contract as data.upload).
         resolved = os.path.expanduser(path)
         source = "local" if os.path.isabs(resolved) else "upload"
+        params: dict[str, Any] = {"source": source, "path": resolved}
+        if sampling_rate is not None:
+            if not math.isfinite(sampling_rate) or sampling_rate <= 0:
+                raise local_tool_error(
+                    f"Invalid sampling_rate '{sampling_rate}': provide a positive "
+                    "number of Hz (e.g. 250.0).",
+                    code=SAMPLING_RATE_INVALID_CODE,
+                    status_code=400,
+                )
+            params["samplingRate"] = sampling_rate
+        elif resolved.strip().lower().endswith(_RATELESS_EXTENSIONS):
+            raise local_tool_error(
+                "sampling_rate is required for CSV/TSV/TXT files: they carry no "
+                "sampling rate and Nimbus never assumes one. Retry "
+                "data.inspect_file with sampling_rate=<Hz> (e.g. 250.0).",
+                code=SAMPLING_RATE_REQUIRED_CODE,
+                status_code=400,
+            )
         try:
-            return client.get("/api/data/describe", params={"source": source, "path": resolved})
+            return client.get("/api/data/describe", params=params)
         except McpToolError as err:
             if source == "local" and err.status_code == 403 and err.code == _LOCAL_FORBIDDEN_CODE:
                 # Hosted backend: setup-style guidance instead of a dead end.

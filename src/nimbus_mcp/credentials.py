@@ -51,6 +51,7 @@ from .errors import McpToolError
 
 __all__ = [
     "DEFAULT_API_URL",
+    "HOSTED_API_URL",
     "DESKTOP_APP_DIR",
     "DESKTOP_KEY_FILENAME",
     "REMOTE_MCP_KEY_OVERRIDE_ENV",
@@ -69,6 +70,11 @@ __all__ = [
 ]
 
 DEFAULT_API_URL = "http://127.0.0.1:8080"
+# The hosted Nimbus API (same URL the gateway's fly.toml and the README use).
+# Default for an explicit hosted token (NIMBUS_TOKEN / NIMBUS_TOKEN_FILE) when
+# NIMBUS_API_URL is unset: a nimb_ token is minted by and only valid against
+# the hosted backend, so pointing it at 127.0.0.1:8080 could only fail.
+HOSTED_API_URL = "https://nimbus-studio.fly.dev"
 
 # The desktop app's Electron userData folder name and key file (desktop/lib/
 # mcp-config.js writes {"key": "...", "createdAt": "...", "port": <int>?} there,
@@ -282,9 +288,11 @@ def resolve_credential(
 ) -> ResolvedCredential:
     """Run the full chain (see the module docstring for order and semantics).
 
-    ``api_url`` resolution: ``NIMBUS_API_URL`` env > the store's ``api_url`` >
-    the desktop key file's ``port`` (``http://127.0.0.1:<port>``) > the
-    desktop default (``http://127.0.0.1:8080``, i.e. ``DEFAULT_API_URL``).
+    ``api_url`` resolution: ``NIMBUS_API_URL`` env (always wins) > the store's
+    ``api_url`` > the desktop key file's ``port`` (``http://127.0.0.1:<port>``)
+    > the default. The default is :data:`HOSTED_API_URL` for an env/file hosted
+    token (``NIMBUS_TOKEN``/``NIMBUS_TOKEN_FILE``) and the desktop default
+    (``http://127.0.0.1:8080``, ``DEFAULT_API_URL``) for everything else.
 
     ``X-MCP-Key`` results (``key``/``desktop_key``) are additionally checked
     against the resolved ``api_url``: a non-loopback host raises
@@ -306,17 +314,19 @@ def _resolve_chain(
     platform = sys.platform if platform is None else platform
     env_api = env.get("NIMBUS_API_URL", "").strip().rstrip("/")
 
-    def _api_url(store_api: str | None = None) -> str:
+    def _api_url(store_api: str | None = None, fallback: str = DEFAULT_API_URL) -> str:
         if env_api:
             return env_api
         if store_api:
             return store_api.rstrip("/")
-        return DEFAULT_API_URL
+        return fallback
 
     # 1. NIMBUS_TOKEN env — hosted token, wins over everything (v0.3 rule kept).
     token = env.get("NIMBUS_TOKEN", "").strip()
     if token:
-        return ResolvedCredential("token", _api_url(), token, {"source": "env"})
+        return ResolvedCredential(
+            "token", _api_url(fallback=HOSTED_API_URL), token, {"source": "env"}
+        )
 
     # 2. NIMBUS_TOKEN_FILE — {"token": "..."}; explicit, so errors are loud.
     token_file = env.get("NIMBUS_TOKEN_FILE", "").strip()
@@ -329,7 +339,10 @@ def _resolve_chain(
                 path, "NIMBUS_TOKEN_FILE", 'expected a JSON object like {"token": "..."}'
             )
         return ResolvedCredential(
-            "token", _api_url(), token, {"source": "token_file", "path": str(path)}
+            "token",
+            _api_url(fallback=HOSTED_API_URL),
+            token,
+            {"source": "token_file", "path": str(path)},
         )
 
     # 3. Local key mode (v0.3 back-compat): NIMBUS_MCP_KEY > NIMBUS_MCP_KEY_FILE.
@@ -502,3 +515,25 @@ def decode_token_claims(token: str) -> dict[str, Any]:
     except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def token_access_summary(claims: Mapping[str, Any]) -> dict[str, Any]:
+    """Display-only kind/scopes from decoded token claims (PR-K1).
+
+    ``knd`` is ``personal`` | ``ci`` (absent on pre-K1 tokens → ``personal``);
+    ``scp`` absent means full access, reported as ``scopes: None`` plus
+    ``fullAccess: True``. Never used for an auth decision — the backend
+    enforces scopes.
+    """
+    if not claims:
+        return {}
+    kind = claims.get("knd")
+    scp = claims.get("scp")
+    if isinstance(scp, str):
+        scp = scp.split()
+    scopes = [s for s in scp if isinstance(s, str)] if isinstance(scp, list) else None
+    return {
+        "kind": kind if isinstance(kind, str) and kind else "personal",
+        "scopes": scopes,
+        "fullAccess": "scp" not in claims,
+    }

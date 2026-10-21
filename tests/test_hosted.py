@@ -30,6 +30,11 @@ class FakeClient:
             raise self.raise_on_get
         return {"ok": True, "token": self.config.nimbus_token}
 
+    def ensure_ready(self):
+        self.calls.append(("ensure_ready", ()))
+        if self.raise_on_get is not None:
+            raise self.raise_on_get
+
     def close(self):
         self.calls.append(("close", ()))
 
@@ -226,12 +231,15 @@ def test_rejected_token_translates_to_hosted_guidance() -> None:
     with pytest.raises(SetupRequired) as err:
         proxy.get("/api/me/profile")
     guidance = err.value.guidance
-    # Hosted flavor: the primary fix is the header (first option), and the
-    # message frames the gateway context (login only appears as the LOCAL
-    # alternative, which is fine — it just cannot be the only guidance).
-    assert "X-Nimbus-Token" in guidance["message"]
+    # B4: a token WAS sent — say it was rejected and to re-mint it, never
+    # the "add the X-Nimbus-Token header" guidance for headerless calls.
+    assert "rejected" in guidance["message"]
+    assert "received your Nimbus API token" in guidance["message"]
     assert "gateway" in guidance["message"]
-    assert "X-Nimbus-Token" in guidance["options"][0]["action"]
+    assert "add the" not in guidance["options"][0]["action"]
+    assert "fresh token" in guidance["options"][0]["action"]
+    assert "X-Nimbus-Token" in guidance["options"][0]["detail"]
+    assert guidance["tokenRejected"] is True
     # Situation extras survive the translation (rejected-with-days-left case
     # carries daysLeft; the undecodable case carries neither — both fine).
     assert guidance.get("daysLeft") is None or isinstance(guidance["daysLeft"], int)
@@ -243,6 +251,62 @@ def test_ensure_ready_enforces_header() -> None:
         proxy.ensure_ready()
     proxy2, _ = _client({"x-nimbus-token": "nimb_ok"})
     proxy2.ensure_ready()  # no raise
+
+
+def test_gateway_credential_check_translates_rejection_and_caches() -> None:
+    """B5 on the gateway: a sent-but-rejected token fails the experiment.run
+    credential check with the rejected-token guidance; ensure_ready itself
+    stays a cheap header check (no backend call)."""
+    from nimbus_mcp.access import clear_tier_cache, verify_hosted_credential
+
+    clear_tier_cache()
+    made: list[FakeClient] = []
+
+    def factory(cfg: McpConfig) -> FakeClient:
+        client = FakeClient(cfg)
+        client.raise_on_get = SetupRequired(token_rejected_guidance("nimb_bad", 401))
+        made.append(client)
+        return client
+
+    proxy = HeaderCredentialClient(
+        _config(),
+        client_factory=factory,  # type: ignore[arg-type]
+        headers_getter=lambda: {"authorization": "Bearer nimb_bad"},
+    )
+    proxy.ensure_ready()  # header present: no raise, no backend call
+    assert all(not c.calls for c in made)
+    with pytest.raises(SetupRequired) as err:
+        verify_hosted_credential(proxy)
+    assert "rejected" in err.value.guidance["message"]
+    assert "add the" not in err.value.guidance["options"][0]["action"]
+
+    clear_tier_cache()
+    ok_made: list[FakeClient] = []
+
+    def ok_factory(cfg: McpConfig) -> FakeClient:
+        client = FakeClient(cfg)
+        client.get = lambda path, params=None: (  # type: ignore[method-assign]
+            client.calls.append(("get", (path, params))) or {"capabilities": {"isPro": True}}
+        )
+        ok_made.append(client)
+        return client
+
+    ok = HeaderCredentialClient(
+        _config(),
+        client_factory=ok_factory,  # type: ignore[arg-type]
+        headers_getter=lambda: {"x-nimbus-token": "nimb_good"},
+    )
+    verify_hosted_credential(ok)
+    verify_hosted_credential(ok)  # cached per credential: one profile call
+    assert sum(1 for c in ok_made for call in c.calls if call[0] == "get") == 1
+    clear_tier_cache()
+
+
+def test_headerless_call_still_gets_add_header_guidance() -> None:
+    proxy, _ = _client({})
+    with pytest.raises(SetupRequired) as err:
+        proxy.get("/x")
+    assert "X-Nimbus-Token" in err.value.guidance["options"][0]["action"]
 
 
 def test_client_cache_is_bounded() -> None:

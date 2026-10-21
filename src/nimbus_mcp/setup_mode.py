@@ -16,13 +16,25 @@ from .credentials import decode_token_claims
 from .errors import McpToolError
 
 __all__ = [
+    "DESKTOP_DOWNLOAD_MACOS",
+    "DESKTOP_DOWNLOAD_WINDOWS",
+    "HOSTED_GATEWAY_URL",
+    "LOCAL_BACKEND_UNREACHABLE",
     "SETUP_OPTIONS",
+    "desktop_app_not_running_guidance",
     "SETUP_MESSAGE",
     "SetupRequired",
     "local_mode_guidance",
     "setup_guidance",
     "token_rejected_guidance",
 ]
+
+# Public "latest" aliases (docs/DESKTOP_APP.md) and the hosted MCP gateway.
+DESKTOP_DOWNLOAD_MACOS = "https://nimbus-desktop-releases.fly.storage.tigris.dev/latest.dmg"
+DESKTOP_DOWNLOAD_WINDOWS = "https://nimbus-desktop-releases.fly.storage.tigris.dev/latest-win.exe"
+HOSTED_GATEWAY_URL = "https://nimbus-mcp.fly.dev/mcp"
+# Stable machine-readable reason for "nothing answered on the local backend".
+LOCAL_BACKEND_UNREACHABLE = "local_backend_unreachable"
 
 SETUP_MESSAGE = (
     "No Nimbus credential is configured, so this tool cannot run yet. Pick one "
@@ -75,22 +87,72 @@ def setup_guidance(message: str | None = None, **extra: Any) -> dict[str, Any]:
     return guidance
 
 
-def local_mode_guidance(status: int | None = 401) -> dict[str, Any]:
-    """Guidance when an ANONYMOUS local call is rejected by the local backend.
+def _unreachable_options() -> list[dict[str, str]]:
+    return [
+        {
+            "action": "install the Nimbus Studio desktop app",
+            "detail": "It runs the Nimbus backend on this machine and nimbus-mcp "
+            "finds it automatically — no login needed. Open the app, then retry.",
+            "url_macos": DESKTOP_DOWNLOAD_MACOS,
+            "url_windows": DESKTOP_DOWNLOAD_WINDOWS,
+        },
+        {
+            "action": "use the hosted gateway",
+            "detail": "No install: point your MCP client at the remote server "
+            f"{HOSTED_GATEWAY_URL} with a Nimbus API token (Nimbus Studio → "
+            "Account → API tokens), or run `nimbus-mcp login` here to use the "
+            "hosted API from this server.",
+            "url": HOSTED_GATEWAY_URL,
+        },
+        {
+            "action": "nimbus-mcp login",
+            "detail": "Connect this server to the hosted Nimbus API via a "
+            "one-click browser approval (token stored at "
+            "~/.nimbus/credentials.json, 0600).",
+        },
+        {
+            "action": "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
+            "detail": "Developers: start the dev backend on :8080 and set "
+            "NIMBUS_MCP_KEY to its MCP_LOCAL_KEY.",
+        },
+    ]
+
+
+def _unreachable_message(lead: str) -> str:
+    return (
+        f"{lead} Pick one: (1) install and open the Nimbus Studio desktop app — "
+        "it runs the backend locally and nimbus-mcp finds it automatically, no "
+        f"login needed. macOS: {DESKTOP_DOWNLOAD_MACOS} · Windows: "
+        f"{DESKTOP_DOWNLOAD_WINDOWS} (2) or use hosted Nimbus with no install: "
+        f"point your MCP client at {HOSTED_GATEWAY_URL}, or run `nimbus-mcp "
+        "login` here to use the hosted API from this server. (3) Developers: "
+        "start the dev backend on :8080 and set NIMBUS_MCP_KEY to its "
+        "MCP_LOCAL_KEY. Then retry this tool."
+    )
+
+
+def local_mode_guidance(status: int | None = 401, api_url: str | None = None) -> dict[str, Any]:
+    """Guidance when an ANONYMOUS local call fails against the local backend.
 
     Local Free (plan X9) needs no Nimbus Studio login: the missing piece is
     a local identity (the desktop app's auto-discovered key, or a dev
-    backend key), never an account. This is the local-mode default the old
-    blanket setup response becomes — returned only when a call actually
-    fails, not as a pre-emptive gate on every tool.
+    backend key), never an account. ``status=None`` means nothing answered at
+    all (no desktop app): the payload then carries the desktop download
+    links, the hosted gateway and ``reason: local_backend_unreachable``.
     """
     if status is None:
-        detail = "could not be reached at all (it is not running)"
-    else:
-        detail = f"rejected this request (HTTP {status})"
+        where = f" (nothing answered at {api_url})" if api_url else ""
+        guidance = setup_guidance(
+            message=_unreachable_message(
+                f"No Nimbus backend is running on this machine{where}."
+            ),
+            reason=LOCAL_BACKEND_UNREACHABLE,
+        )
+        guidance["options"] = _unreachable_options()
+        return guidance
     guidance = setup_guidance(
         message=(
-            f"The local Nimbus backend {detail} "
+            f"The local Nimbus backend rejected this request (HTTP {status}) "
             "and no local identity was presented. No Nimbus Studio login "
             "is needed for local work: start the Nimbus Studio desktop app "
             "(its local key is auto-discovered), or set NIMBUS_MCP_KEY to the "
@@ -109,6 +171,22 @@ def local_mode_guidance(status: int | None = 401) -> dict[str, Any]:
     return guidance
 
 
+def desktop_app_not_running_guidance(api_url: str) -> dict[str, Any]:
+    """A desktop-app key file was found but nothing answers: the app is
+    installed but closed (or was uninstalled with a stale key left behind)."""
+    guidance = setup_guidance(
+        message=_unreachable_message(
+            "The Nimbus Studio desktop app isn't running (its key file was "
+            f"found, but nothing answered at {api_url}). Open the app and "
+            "retry. If it isn't installed:"
+        ),
+        reason=LOCAL_BACKEND_UNREACHABLE,
+        desktopKeyFound=True,
+    )
+    guidance["options"] = _unreachable_options()
+    return guidance
+
+
 def token_rejected_guidance(token: str, status: int) -> dict[str, Any]:
     """Guidance for a hosted token rejected mid-session (401 expired/revoked).
 
@@ -117,8 +195,10 @@ def token_rejected_guidance(token: str, status: int) -> dict[str, Any]:
     (``daysExpired``); the raw secret never appears anywhere.
     """
     exp = decode_token_claims(token).get("exp")
+    marks = {"tokenRejected": True, "httpStatus": status}
     if not isinstance(exp, (int, float)) or isinstance(exp, bool):
         return setup_guidance(
+            **marks,
             message=(
                 f"Your Nimbus API token was rejected (HTTP {status}) — run "
                 "`nimbus-mcp login` to mint a fresh one (or update NIMBUS_TOKEN "
@@ -136,6 +216,7 @@ def token_rejected_guidance(token: str, status: int) -> dict[str, Any]:
                 "token."
             ),
             daysLeft=days_left,
+            **marks,
         )
     days_expired = max(1, math.floor(-remaining / 86400))
     return setup_guidance(
@@ -145,6 +226,7 @@ def token_rejected_guidance(token: str, status: int) -> dict[str, Any]:
             "(or update NIMBUS_TOKEN if you set it manually)."
         ),
         daysExpired=days_expired,
+        **marks,
     )
 
 

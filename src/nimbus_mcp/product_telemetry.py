@@ -61,6 +61,27 @@ EVENTS = (
     "version_drift_warned",
 )
 
+# Tools whose success is a REAL local result (execution/plot/stats/export) —
+# the only ones that may fire ``mcp_first_local_result`` (B3). Discovery,
+# whoami, validation and listing calls succeed without producing a result.
+RESULT_TOOLS = frozenset(
+    {
+        "execution.results",
+        "execution.download_artifact",
+        "experiment.get",
+        "plots.confusion",
+        "plots.dataset",
+        "plots.erp",
+        "plots.leaderboard",
+        "stats.grouped",
+        "foundation.compare",
+        "bids.export_dataset",
+        "bids.export_execution",
+        "pipeline.export",
+        "protocol.export_stats",
+    }
+)
+
 _CONSENT_GRANTED = "granted"
 _CONSENT_DENIED = "denied"
 
@@ -105,6 +126,11 @@ class Telemetry:
         self._environ = os.environ if environ is None else environ
         self._disabled = disabled
         self._lock = threading.RLock()
+        self._first_run_inflight = False
+        # One mcp_first_run attempt per process: a failed send is retried by
+        # the next process (first_run_sent stays False), not on every tool call.
+        self._first_run_attempted = False
+        self._first_local_result_attempted = False
         self._state: dict[str, Any] | None = None
 
     @classmethod
@@ -115,14 +141,22 @@ class Telemetry:
     # -- state ---------------------------------------------------------------
 
     def _load(self) -> dict[str, Any]:
-        """Load (or create) state. Race-safe: an RLock serializes threads,
-        and a fresh install claims its UUID with an exclusive create, so a
-        concurrent process that lost the race adopts the winner's id."""
+        """Current state, RE-READ from disk on every call (H1).
+
+        The file is the source of truth shared with other processes: a
+        long-running server must observe ``nimbus-mcp telemetry off`` (and
+        ``*_sent`` flags written by a sibling process) instead of trusting a
+        cached copy. The in-memory copy is only a fallback for an unreadable
+        or unwritable home. Race-safe first install: an RLock serializes
+        threads, and a fresh install claims its UUID with an exclusive
+        create, so a concurrent process that lost the race adopts the
+        winner's id."""
         with self._lock:
-            if self._state is not None:
-                return self._state
             state = self._read_state()
             if not state.get("install_id"):
+                if self._state is not None and self._state.get("install_id"):
+                    # Unreadable/unwritable home: keep this process's view.
+                    return self._state
                 state = {**state, "install_id": uuid.uuid4().hex}
                 if not self._exclusive_create(state):
                     winner = self._read_state()
@@ -130,6 +164,16 @@ class Telemetry:
                         state = winner
             self._state = state
             return self._state
+
+    def _update(self, **changes: Any) -> None:
+        """Merge-on-save (H1): re-read the file under the lock and apply ONLY
+        ``changes`` — never write back cached keys (notably ``consent``) that
+        another process may have changed since this one last looked."""
+        with self._lock:
+            state = dict(self._load())
+            state.update(changes)
+            self._state = state
+            self._save()
 
     def _read_state(self) -> dict[str, Any]:
         try:
@@ -197,10 +241,10 @@ class Telemetry:
 
     def set_consent(self, granted: bool) -> None:
         with self._lock:
-            self._load()["consent"] = _CONSENT_GRANTED if granted else _CONSENT_DENIED
-            self._save()
+            self._update(consent=_CONSENT_GRANTED if granted else _CONSENT_DENIED)
         if granted:
-            self.capture("first_run")
+            # Synchronous: the CLI exits right after this call (B1).
+            self.capture("first_run", sync=True)
 
     def enabled(self) -> bool:
         """Capture allowed: consent granted AND a project key configured."""
@@ -228,8 +272,7 @@ class Telemetry:
                 return None
             if state.get("notice_shown"):
                 return None
-            state["notice_shown"] = True
-            self._save()
+            self._update(notice_shown=True)
         return {
             "message": (
                 "Anonymous usage telemetry is OFF. nimbus-mcp can send "
@@ -250,14 +293,33 @@ class Telemetry:
     def _default_sender(self, payload: dict[str, Any]) -> None:
         import httpx
 
-        httpx.post(
+        resp = httpx.post(
             f"{self._host()}/capture/",
             json=payload,
             timeout=2.0,
         )
+        # Delivery means a 2xx from the capture endpoint. A 4xx/5xx raises, so
+        # _safe_send reports delivered=False and one-shot events (first_run,
+        # first_local_result) stay unsent and are retried by the next process.
+        resp.raise_for_status()
 
-    def capture(self, event: str, properties: dict[str, Any] | None = None) -> None:
-        """Fire-and-forget; returns immediately, swallows every failure."""
+    def capture(
+        self,
+        event: str,
+        properties: dict[str, Any] | None = None,
+        *,
+        sync: bool = False,
+    ) -> None:
+        """Fire-and-forget; returns immediately, swallows every failure.
+
+        ``sync=True`` sends inline (bounded by the sender's 2 s timeout) for
+        short-lived processes — the ``nimbus-mcp telemetry on`` CLI would
+        otherwise exit before a daemon-thread send completes (B1).
+
+        ``first_run_sent`` is persisted only AFTER ``mcp_first_run`` was
+        delivered: a lost send is retried by the next capture/session rather
+        than silently marked done.
+        """
         if event not in EVENTS:
             return
         try:
@@ -265,25 +327,56 @@ class Telemetry:
                 return
             with self._lock:
                 state = self._load()
-                if event != "first_run" and not state.get("first_run_sent"):
-                    state["first_run_sent"] = True
-                    self._save()
-                    self._dispatch("first_run", {})
-                if event == "first_run":
-                    if state.get("first_run_sent"):
-                        return
-                    state["first_run_sent"] = True
-                    self._save()
+                need_first_run = (
+                    not state.get("first_run_sent")
+                    and not self._first_run_inflight
+                    and not self._first_run_attempted
+                )
+                if need_first_run:
+                    self._first_run_inflight = True
+                    self._first_run_attempted = True
                 if event == "first_local_result":
-                    if state.get("first_local_result_sent"):
+                    if (
+                        state.get("first_local_result_sent")
+                        or self._first_local_result_attempted
+                    ):
                         return
-                    state["first_local_result_sent"] = True
-                    self._save()
-            self._dispatch(event, properties or {})
+                    # Marked sent only on a 2xx (see _first_local_result_done);
+                    # one attempt per process, retried by the next one.
+                    self._first_local_result_attempted = True
+            if need_first_run:
+                self._dispatch(
+                    "first_run", {}, sync=sync, on_done=self._first_run_done
+                )
+            if event == "first_local_result":
+                self._dispatch(
+                    event, properties or {}, sync=sync, on_done=self._first_local_result_done
+                )
+            elif event != "first_run":
+                self._dispatch(event, properties or {}, sync=sync)
         except Exception:  # noqa: BLE001 - telemetry must never break tools
             pass
 
-    def _dispatch(self, event: str, properties: dict[str, Any]) -> None:
+    def _first_local_result_done(self, delivered: bool) -> None:
+        if not delivered:
+            return
+        with self._lock:
+            self._update(first_local_result_sent=True)
+
+    def _first_run_done(self, delivered: bool) -> None:
+        with self._lock:
+            self._first_run_inflight = False
+            if delivered:
+                self._update(first_run_sent=True)
+
+    def _dispatch(
+        self,
+        event: str,
+        properties: dict[str, Any],
+        *,
+        sync: bool = False,
+        on_done: Callable[[bool], None] | None = None,
+    ) -> None:
         props: dict[str, Any] = {
             "$ip": "",
             "$geoip_disable": True,
@@ -299,16 +392,30 @@ class Telemetry:
             "distinct_id": str(self._load().get("install_id")),
             "properties": props,
         }
+        if sync:
+            self._safe_send(payload, on_done)
+            return
         thread = threading.Thread(
-            target=self._safe_send, args=(payload,), daemon=True
+            target=self._safe_send, args=(payload, on_done), daemon=True
         )
         thread.start()
 
-    def _safe_send(self, payload: dict[str, Any]) -> None:
+    def _safe_send(
+        self,
+        payload: dict[str, Any],
+        on_done: Callable[[bool], None] | None = None,
+    ) -> None:
+        delivered = False
         try:
             self._sender(payload)
+            delivered = True
         except Exception:  # noqa: BLE001 - fire-and-forget
             pass
+        if on_done is not None:
+            try:
+                on_done(delivered)
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- semantic helpers used by the middleware ---------------------------------
 
@@ -321,7 +428,7 @@ class Telemetry:
         error_code: str | None,
         duration_s: float,
     ) -> None:
-        if success and mode in ("anonymous", "local"):
+        if success and mode in ("anonymous", "local") and tool in RESULT_TOOLS:
             self.capture("first_local_result", {"mode": mode})
         self.capture(
             "tool_completed",

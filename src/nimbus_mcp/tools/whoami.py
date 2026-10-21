@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 
 from ..access import MODE_ANONYMOUS, client_mode
 from ..client import NimbusClient
-from ..credentials import decode_token_claims
+from ..credentials import decode_token_claims, token_access_summary
 from ._annotations import READ_ONLY
 
 
@@ -31,7 +31,9 @@ def _token_info(client: NimbusClient) -> dict[str, Any] | None:
     name = client.config.credential_meta.get("name")
     if isinstance(name, str) and name:
         info["name"] = name
-    exp = decode_token_claims(token).get("exp")
+    claims = decode_token_claims(token)
+    info.update(token_access_summary(claims))
+    exp = claims.get("exp")
     if isinstance(exp, (int, float)) and not isinstance(exp, bool):
         info["expiresAt"] = datetime.fromtimestamp(exp, timezone.utc).isoformat()
         info["daysLeft"] = max(0, math.ceil((exp - time.time()) / 86400))
@@ -50,7 +52,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         if client_mode(client) == MODE_ANONYMOUS:
             return {
                 "authenticated": False,
-                "mode": "local",
+                # Same name the access model and telemetry events use
+                # (access.MODE_ANONYMOUS); the tier says it is Local Free.
+                "mode": "anonymous",
                 "tier": "local-free",
                 "userId": None,
                 "email": None,
@@ -80,6 +84,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             # credential modes never gain token material here — name/expiry
             # identify them, and the raw secret is never printed.
             token_info = {"masked": report["token"]}
+            claims_fn = getattr(client, "current_token_claims", None)
+            claims = claims_fn() if callable(claims_fn) else {}
+            token_info.update(token_access_summary(claims))
+            exp = claims.get("exp")
+            if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+                token_info["expiresAt"] = datetime.fromtimestamp(exp, timezone.utc).isoformat()
+                token_info["daysLeft"] = max(0, math.ceil((exp - time.time()) / 86400))
         return {
             "userId": profile.get("userId"),
             "email": profile.get("email"),

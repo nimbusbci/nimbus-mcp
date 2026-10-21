@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import time
+from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -12,6 +14,7 @@ from fastmcp.tools.base import ToolResult
 from . import __version__, version_check
 from .client import NimbusClient, NullClient
 from .config import DEFAULT_SERVE_HOST, load_config
+from .errors import McpToolError
 from .product_telemetry import Telemetry, get_telemetry
 from .setup_mode import SetupRequired
 from .tools import (
@@ -122,6 +125,63 @@ class SetupGuidanceMiddleware(Middleware):
             if isinstance(cause, SetupRequired):
                 return ToolResult(structured_content=cause.guidance)
             raise
+
+
+# fastmcp loggers that print "Error calling tool …" with a full (rich)
+# traceback for every tool exception.
+_TOOL_ERROR_LOGGERS = ("fastmcp.server.server", "fastmcp.tools.base", "fastmcp.tools.function_tool")
+
+
+def _expected_condition(exc: BaseException | None) -> BaseException | None:
+    """The actionable McpToolError/SetupRequired being logged, if that is what
+    it is: the logged exception itself, or its explicit ``__cause__`` (a
+    ``raise X from err`` wrapper). ``__context__`` is never followed — a real
+    bug raised *while handling* an expected error must keep its traceback."""
+    for cur in (exc, getattr(exc, "__cause__", None)):
+        if isinstance(cur, (SetupRequired, McpToolError)):
+            return cur
+    return None
+
+
+class ExpectedConditionLogFilter(logging.Filter):
+    """Expected setup/actionable conditions log ONE stderr line, no traceback.
+
+    A missing backend, rejected token or tier check is an answer the agent
+    already receives as structured guidance; dumping a ~6 KB rich traceback
+    per call to stderr only floods clients that do not drain it. Genuine
+    bugs (any other exception) keep their full traceback.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        expected = _expected_condition(exc)
+        if expected is None:
+            return True
+        if isinstance(expected, SetupRequired):
+            detail = str(expected.guidance.get("message") or "setup required")
+            kind = "setup required"
+        else:
+            detail = str(expected)
+            kind = getattr(expected, "code", None) or "tool error"
+        first = detail.strip().splitlines()[0] if detail.strip() else ""
+        record.msg = f"{record.getMessage()} ({kind}): {first[:200]}"
+        record.args = None
+        record.exc_info = None
+        record.exc_text = None
+        if record.levelno > logging.WARNING:
+            record.levelno, record.levelname = logging.WARNING, "WARNING"
+        return True
+
+
+_LOG_FILTER = ExpectedConditionLogFilter()
+
+
+def install_expected_condition_log_filter() -> None:
+    """Idempotently attach the filter to fastmcp's tool-error loggers."""
+    for name in _TOOL_ERROR_LOGGERS:
+        logger = logging.getLogger(name)
+        if _LOG_FILTER not in logger.filters:
+            logger.addFilter(_LOG_FILTER)
 
 
 def _access_mode_of(client: object) -> str:
@@ -235,6 +295,7 @@ def build_server(
     client: NimbusClient | NullClient | None = None,
     *,
     product_telemetry: Telemetry | None = None,
+    auth: Any = None,
 ) -> FastMCP:
     if client is None:
         config = load_config()
@@ -245,7 +306,8 @@ def build_server(
         client = NimbusClient(config)
     # version= so the initialize handshake (serverInfo.version) reports THIS
     # package's version — FastMCP defaults to advertising its own.
-    mcp = FastMCP("nimbus", version=__version__, instructions=INSTRUCTIONS)
+    mcp = FastMCP("nimbus", version=__version__, instructions=INSTRUCTIONS, auth=auth)
+    install_expected_condition_log_filter()
     mcp.add_middleware(SetupGuidanceMiddleware())
     if product_telemetry is None:
         # The hosted gateway has no install identity and must not attach
@@ -303,7 +365,20 @@ def serve(host: str = DEFAULT_SERVE_HOST, port: int = 8080, path: str = "/mcp") 
     # reach this code path and the SDK rides the `sentry` extra.
     init_gateway_sentry()
 
+    from .oauth import oauth_enabled, provider_from_env
+
     client = HeaderCredentialClient(load_config())
-    build_server(client, product_telemetry=Telemetry.disabled()).run(
+    # PR-O3: MCP-spec OAuth only when NIMBUS_MCP_OAUTH=1; otherwise the gateway
+    # behaves exactly as before (header tokens + setupRequired guidance).
+    auth = provider_from_env() if oauth_enabled() else None
+    if auth is not None and client.config.nimbus_token:
+        # With OAuth on, headerless requests get the spec 401 before any tool
+        # runs, so the single-tenant NIMBUS_TOKEN fallback never applies.
+
+        logging.getLogger("nimbus_mcp.server").warning(
+            "NIMBUS_MCP_OAUTH=1: the startup NIMBUS_TOKEN fallback is ignored "
+            "(headerless requests must sign in)"
+        )
+    build_server(client, product_telemetry=Telemetry.disabled(), auth=auth).run(
         transport="http", host=host, port=port, path=path
     )

@@ -348,3 +348,20 @@ def test_credential_report_key_mode_defaults_source_env():
     """Key mode reports the masked mcp_key; no meta → source "env"."""
     c = make_client(lambda r: httpx.Response(200, json={}))
     assert c.credential_report() == {"source": "env", "token": "k…"}
+
+
+def test_backend_error_code_surfaced_in_message_with_correlation_id():
+    """N4: the agent-visible text carries the backend's stable code too."""
+    body = {
+        "title": "Forbidden",
+        "status": 403,
+        "detail": "This API token lacks the 'write' scope required for POST /api/projects.",
+        "code": "nimbus.auth.token_scope_insufficient",
+        "correlationId": "cid-403",
+    }
+    err = NimbusClient._backend_error(httpx.Response(403, json=body))
+    text = str(err)
+    assert text.startswith("Nimbus API error 403: This API token lacks")
+    assert "(code: nimbus.auth.token_scope_insufficient, correlationId: cid-403)" in text
+    assert err.code == "nimbus.auth.token_scope_insufficient"
+    assert err.status_code == 403 and err.correlation_id == "cid-403"

@@ -627,3 +627,37 @@ def test_serve_port_zero_is_explicit(monkeypatch):
     monkeypatch.delenv("NIMBUS_MCP_PORT", raising=False)
     cli.main(["serve", "--port", "0"])
     assert captured["port"] == 0
+
+
+def test_status_shows_token_kind_and_scopes(capsys):
+    """PR-K1: status prints the token kind and scopes (or full access)."""
+    exp = int(time.time()) + 365 * 86400
+    cred = ResolvedCredential(
+        "token",
+        "http://api.nimbus.test",
+        _fake_jwt_token({"exp": exp, "knd": "ci", "scp": ["read", "run"]}),
+        {"source": "env"},
+    )
+    rc = cli.cmd_status(
+        _args(command="status"),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_profile_response())),
+        cred=cred,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "token kind: ci · scopes: read run" in out
+
+
+def test_status_legacy_token_reports_full_access(capsys):
+    cred = ResolvedCredential(
+        "token",
+        "http://api.nimbus.test",
+        _fake_jwt_token({"exp": int(time.time()) + 86400}),
+        {"source": "env"},
+    )
+    cli.cmd_status(
+        _args(command="status"),
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_profile_response())),
+        cred=cred,
+    )
+    assert "token kind: personal · scopes: full access" in capsys.readouterr().out

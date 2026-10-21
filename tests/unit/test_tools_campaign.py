@@ -1,16 +1,19 @@
 import asyncio
 import base64
 import json
+import re
 import threading
 import time
 
 import httpx
 import pytest
 from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 
 from nimbus_mcp.client import NimbusClient
 from nimbus_mcp.config import McpConfig
 from nimbus_mcp.hosted import HeaderCredentialClient
+from nimbus_mcp.server import SetupGuidanceMiddleware
 from nimbus_mcp.tools import campaign
 
 TRAIN_GRAPH = {
@@ -177,6 +180,16 @@ def make_server(backend: FakeBackend) -> FastMCP:
     server = FastMCP("t")
     campaign.register(server, client)
     return server
+
+
+@pytest.fixture(autouse=True)
+def _fresh_tier_cache():
+    """The credential check caches per token; tests share fake tokens."""
+    from nimbus_mcp.access import clear_tier_cache
+
+    clear_tier_cache()
+    yield
+    clear_tier_cache()
 
 
 def expired_token_client(handler) -> NimbusClient:
@@ -700,7 +713,8 @@ async def test_expired_token_on_summary_poll_is_not_retried(monkeypatch):
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path == "/api/me/profile":
-            return httpx.Response(401, json={"detail": "no"})
+            # preflight passes: the token expires MID-experiment
+            return httpx.Response(200, json={"capabilities": {"isPro": True}})
         if path == "/api/execute":
             return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
         if path.endswith("/summary"):
@@ -729,7 +743,8 @@ async def test_expired_token_on_result_fetch_is_not_result_fetch_failed(monkeypa
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path == "/api/me/profile":
-            return httpx.Response(401, json={"detail": "no"})
+            # preflight passes: the token expires MID-experiment
+            return httpx.Response(200, json={"capabilities": {"isPro": True}})
         if path == "/api/execute":
             return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
         if path.endswith("/summary"):
@@ -1047,3 +1062,349 @@ async def test_get_experiment_cross_owner_server_record_not_visible(monkeypatch,
     async with Client(server_a) as c:
         snapshot = await c.call_tool("experiment.get", {"experiment_id": exp_id})
     assert snapshot.data["status"] == "completed"
+
+
+async def test_rejected_token_at_start_returns_relogin_not_running():
+    """B5: a token the backend already rejects must answer experiment.run
+    with re-login guidance — never status "running" plus an experiment id."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/me/profile":
+            return httpx.Response(401, json={"detail": "no"})
+        raise AssertionError(f"no run may start: {req.url.path}")
+
+    server = FastMCP("t")
+    server.add_middleware(SetupGuidanceMiddleware())
+    campaign.register(server, expired_token_client(handler))
+    async with Client(server) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+    data = result.data if isinstance(result.data, dict) else result.structured_content
+    assert data["setupRequired"] is True
+    assert data.get("tokenRejected") is True
+    assert "nimbus-mcp login" in data["message"]
+    assert "experimentId" not in data and data.get("status") != "running"
+
+
+async def test_get_polls_make_no_profile_calls_and_survive_outage(monkeypatch):
+    """experiment.get must not re-check the account: polls cost no
+    /api/me/profile request, and during a backend outage they still return
+    the in-memory status instead of a connectivity error."""
+    from nimbus_mcp.access import clear_tier_cache
+
+    clear_tier_cache()
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    state = {"profile": 0, "down": False}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if state["down"]:
+            raise httpx.ConnectError("backend down", request=req)
+        if path == "/api/me/profile":
+            state["profile"] += 1
+            return httpx.Response(200, json={"capabilities": {"isPro": True}})
+        if path == "/api/execute":
+            return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
+        if path.endswith("/summary"):
+            summary = {"executionId": "exec_1", "status": "running"}
+            return httpx.Response(200, json={"summary": summary})
+        if path.startswith("/api/experiments/"):
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={})
+
+    async with Client(make_token_server(handler)) as c:
+        started = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        exp_id = started.data["experimentId"]
+        # run start: credential check + pre-existing computeOrigin stamp
+        baseline = state["profile"]
+        assert baseline <= 2
+        for _ in range(3):
+            snap = await c.call_tool("experiment.get", {"experiment_id": exp_id})
+            assert snap.data["experimentId"] == exp_id
+        assert state["profile"] == baseline  # polls never touch /api/me/profile
+        state["down"] = True
+        snap = await c.call_tool("experiment.get", {"experiment_id": exp_id})
+        assert snap.data["experimentId"] == exp_id
+        assert snap.data["status"] in ("running", "failed", "completed")
+    clear_tier_cache()
+
+
+async def test_hosted_run_start_makes_one_profile_call_zero_when_cached(monkeypatch):
+    """verify_hosted_credential + the computeOrigin stamp share ONE
+    /api/me/profile per hosted run start; a cached repeat makes none, and the
+    stamp still lands from the shared profile."""
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    state = {"profile": 0}
+    origin = {"kind": "hosted", "region": "iad"}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path == "/api/me/profile":
+            state["profile"] += 1
+            return httpx.Response(
+                200, json={"capabilities": {"isPro": True}, "computeOrigin": origin}
+            )
+        if path == "/api/execute":
+            return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
+        if path.endswith("/summary"):
+            summary = {"executionId": "exec_1", "status": "running"}
+            return httpx.Response(200, json={"summary": summary})
+        return httpx.Response(200, json={"ok": True})
+
+    async with Client(make_token_server(handler)) as c:
+        run = {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        first = await c.call_tool("experiment.run", run)
+        assert state["profile"] == 1
+        snap = await c.call_tool("experiment.get", {"experiment_id": first.data["experimentId"]})
+        assert snap.data["computeOrigin"] == origin  # stamp reused the shared profile
+        await c.call_tool("experiment.run", run)
+        assert state["profile"] == 1  # cached repeat: zero profile calls
+
+
+async def test_hosted_run_start_unreachable_is_tier_unverifiable():
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/api/me/profile":
+            raise httpx.ConnectError("down", request=req)
+        return httpx.Response(200, json={})
+
+    async with Client(make_token_server(handler)) as c:
+        with pytest.raises(ToolError) as err:
+            await c.call_tool(
+                "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            )
+    assert "Cannot verify your Nimbus plan" in str(err.value)
+
+
+# ── N3: local/desktop-key mode with the backend down ────────────────────────
+
+
+def _local_key_server(handler) -> FastMCP:
+    client = NimbusClient(
+        McpConfig(api_url="http://127.0.0.1:9", mcp_key="desk_key", export_dir=None),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(handler),
+    )
+    server = FastMCP("t")
+    campaign.register(server, client)
+    return server
+
+
+async def test_local_key_backend_down_fails_before_returning_an_id(caplog):
+    def down(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=req)
+
+    before = len(campaign.EXPERIMENTS._states)
+    async with Client(_local_key_server(down)) as c:
+        with pytest.raises(Exception, match="Cannot reach the Nimbus backend"):
+            await c.call_tool(
+                "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            )
+    assert len(campaign.EXPERIMENTS._states) == before  # nothing registered
+    assert not any("Could not persist experiment" in r.message for r in caplog.records)
+
+
+async def test_desktop_key_backend_down_returns_app_not_running_guidance_no_id(caplog):
+    """L1: an auto-discovered desktop key with the app closed fails before an
+    id is returned, with the 'app isn't running' setup guidance."""
+
+    def down(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=req)
+
+    client = NimbusClient(
+        McpConfig(  # type: ignore[arg-type]
+            api_url="http://127.0.0.1:9",
+            mcp_key="desk_key",
+            export_dir=None,
+            credential_meta={"source": "desktop"},
+        ),
+        transport=httpx.MockTransport(down),
+    )
+    server = FastMCP("t")
+    campaign.register(server, client)
+    before = len(campaign.EXPERIMENTS._states)
+    async with Client(server) as c:
+        with pytest.raises(Exception) as err:
+            await c.call_tool(
+                "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            )
+    text = str(err.value)
+    assert "desktop app isn't running" in text
+    assert "nimbus-mcp.fly.dev/mcp" in text
+    assert "latest.dmg" in text
+    assert len(campaign.EXPERIMENTS._states) == before
+
+
+async def test_local_key_old_backend_without_experiment_store_still_runs(monkeypatch):
+    """A reachable backend that answers 404 on /api/experiments (older
+    desktop) keeps the best-effort behavior: the run still starts."""
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.startswith("/api/experiments/"):
+            return httpx.Response(404, json={"detail": "not found"})
+        return backend.handler(req)
+
+    async with Client(_local_key_server(handler)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        assert result.data["status"] == "running"
+        assert result.data["experimentId"]
+
+
+def _local_handler_with_experiment_store(experiment_response):
+    backend = FakeBackend(metrics={"exec_1": {"kappa": 0.5}})
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.startswith("/api/experiments/"):
+            return experiment_response(req)
+        return backend.handler(req)
+
+    return handler
+
+
+async def test_local_key_store_5xx_is_tolerated(monkeypatch):
+    """Reachable backend, broken experiment store: best-effort, run starts."""
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    handler = _local_handler_with_experiment_store(
+        lambda req: httpx.Response(503, json={"detail": "busy"})
+    )
+    async with Client(_local_key_server(handler)) as c:
+        result = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+        assert result.data["status"] == "running"
+        assert result.data["experimentId"]
+
+
+async def test_local_key_store_timeout_is_fatal():
+    def timeout(req: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=req)
+
+    before = len(campaign.EXPERIMENTS._states)
+    async with Client(_local_key_server(_local_handler_with_experiment_store(timeout))) as c:
+        with pytest.raises(Exception, match="Timed out talking to the Nimbus backend"):
+            await c.call_tool(
+                "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            )
+    assert len(campaign.EXPERIMENTS._states) == before
+
+
+def test_hosted_connection_error_on_write_through_stays_best_effort(caplog):
+    """Hosted path unchanged: the write-through never raises (fatal flag off)."""
+    client = NimbusClient(
+        McpConfig(api_url="http://h", mcp_key="", nimbus_token="nimb_x", export_dir=None),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(
+            lambda req: (_ for _ in ()).throw(httpx.ConnectError("down", request=req))
+        ),
+    )
+    assert campaign.client_mode(client) == campaign.MODE_HOSTED
+    payload = {"experimentId": "e1", "status": "running", "runs": []}
+    campaign._persist_experiment_to_server(
+        client, payload, fatal_if_unreachable=campaign.client_mode(client) == campaign.MODE_LOCAL
+    )
+    assert any("Could not persist experiment e1" in r.message for r in caplog.records)
+
+
+# ── N4: scoped tokens are refused BEFORE any background work starts ──
+
+
+def _scoped_token(scp: object | None) -> str:
+    def b64(obj: object) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+
+    claims: dict = {"sub": "user_1", "knd": "ci", "exp": int(time.time()) + 3600}
+    if scp is not None:
+        claims["scp"] = scp
+    return "nimb_" + f"{b64({'alg': 'HS256'})}.{b64(claims)}.sig"
+
+
+def _scope_handler(seen: list[str]):
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(f"{req.method} {req.url.path}")
+        if req.url.path == "/api/me/profile":
+            return httpx.Response(200, json={"capabilities": {"isPro": True}})
+        if req.url.path == "/api/execute":
+            return httpx.Response(200, json={"executionId": "exec_1", "message": "started"})
+        if req.url.path.endswith("/summary"):
+            summary = {"executionId": "exec_1", "status": "running"}
+            return httpx.Response(200, json={"summary": summary})
+        return httpx.Response(200, json={"ok": True})
+
+    return handler
+
+
+@pytest.mark.parametrize("scp", [["read"], ["read", "write"], "read write", []])
+async def test_read_only_token_refused_before_running(scp):
+    from nimbus_mcp.access import clear_tier_cache
+
+    clear_tier_cache()
+    seen: list[str] = []
+    client = NimbusClient(
+        McpConfig(api_url="http://t", mcp_key="", export_dir=None, nimbus_token=_scoped_token(scp)),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(_scope_handler(seen)),
+    )
+    server = FastMCP("t")
+    campaign.register(server, client)
+    async with Client(server) as c:
+        with pytest.raises(ToolError) as excinfo:
+            await c.call_tool(
+                "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            )
+    text = str(excinfo.value)
+    assert "403" in text and "'run' scope" in text
+    assert "nimbus.auth.token_scope_insufficient" in text
+    # Locally raised → a locally generated correlationId in the backend's format.
+    assert re.search(
+        r"\(code: nimbus\.auth\.token_scope_insufficient, correlationId: [0-9a-f]{32}\)", text
+    ), text
+    # No experiment record, no execution: nothing but the credential check.
+    assert all(not s.startswith(("PUT", "POST")) for s in seen), seen
+    clear_tier_cache()
+
+
+@pytest.mark.parametrize("scp", [None, ["run"], ["read", "run"]])
+async def test_run_capable_token_still_starts(scp, monkeypatch):
+    from nimbus_mcp.access import clear_tier_cache
+
+    clear_tier_cache()
+    monkeypatch.setattr(campaign, "POLL_INTERVAL_SEC", 0.05)
+    seen: list[str] = []
+    client = NimbusClient(
+        McpConfig(api_url="http://t", mcp_key="", export_dir=None, nimbus_token=_scoped_token(scp)),  # type: ignore[arg-type]
+        transport=httpx.MockTransport(_scope_handler(seen)),
+    )
+    server = FastMCP("t")
+    campaign.register(server, client)
+    async with Client(server) as c:
+        started = await c.call_tool(
+            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+        )
+    assert started.data["status"] == "running"
+    clear_tier_cache()
+
+
+def test_gateway_header_read_token_refused(monkeypatch):
+    """Gateway clients expose per-request claims via current_token_claims()."""
+    import nimbus_mcp.access as access
+    from nimbus_mcp.access import TOKEN_SCOPE_INSUFFICIENT_CODE, require_token_scope
+
+    class _Hdr:
+        config = McpConfig(api_url="http://t", mcp_key="", export_dir=None)  # type: ignore[arg-type]
+
+        def current_token_claims(self):
+            return {"sub": "u", "scp": ["read"]}
+
+    monkeypatch.setattr(access, "client_mode", lambda client: access.MODE_HOSTED)
+    with pytest.raises(campaign.McpToolError) as excinfo:
+        require_token_scope(_Hdr(), "run", "experiment.run")
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.code == TOKEN_SCOPE_INSUFFICIENT_CODE
+    cid = excinfo.value.correlation_id
+    assert cid and len(cid) == 32
+    assert str(excinfo.value).endswith(
+        f"(code: {TOKEN_SCOPE_INSUFFICIENT_CODE}, correlationId: {cid})"
+    )

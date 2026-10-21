@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 
 from nimbus_mcp.client import NimbusClient
 from nimbus_mcp.config import McpConfig
@@ -185,7 +186,7 @@ async def test_inspect_file_hosted_403_local_forbidden_returns_guidance():
         )
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("data.inspect_file", {"path": "/abs/eeg.csv"})
+        result = await c.call_tool("data.inspect_file", {"path": "/abs/eeg.edf"})
     data = result.data
     assert data["ok"] is False
     assert "local backend" in data["message"]
@@ -213,7 +214,7 @@ async def test_inspect_file_relative_path_local_forbidden_still_raises():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="local backend"):
-            await c.call_tool("data.inspect_file", {"path": "uploads/usr1/eeg.csv"})
+            await c.call_tool("data.inspect_file", {"path": "uploads/usr1/eeg.edf"})
 
 
 async def test_inspect_file_other_403_still_raises():
@@ -230,7 +231,7 @@ async def test_inspect_file_other_403_still_raises():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="quota exceeded"):
-            await c.call_tool("data.inspect_file", {"path": "/abs/eeg.csv"})
+            await c.call_tool("data.inspect_file", {"path": "/abs/eeg.edf"})
 
 
 async def test_inspect_file_404_raises_normally():
@@ -239,10 +240,71 @@ async def test_inspect_file_404_raises_normally():
             404,
             json={
                 "code": "nimbus.data.describe_source_not_found",
-                "detail": "Local file not found: /abs/eeg.csv",
+                "detail": "Local file not found: /abs/eeg.edf",
             },
         )
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="not found"):
-            await c.call_tool("data.inspect_file", {"path": "/abs/eeg.csv"})
+            await c.call_tool("data.inspect_file", {"path": "/abs/eeg.edf"})
+
+
+# ── data.inspect_file: sampling_rate for CSV/TSV/TXT ──────────────────────────
+
+
+async def test_inspect_file_passes_sampling_rate_for_csv():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(req.url.params)
+        return httpx.Response(200, json=_DESCRIBE_PAYLOAD)
+
+    async with Client(make_server(handler)) as c:
+        await c.call_tool(
+            "data.inspect_file",
+            {"path": "user_1/abc/eeg.csv", "sampling_rate": 250.0},
+        )
+    assert seen["params"] == {
+        "source": "upload",
+        "path": "user_1/abc/eeg.csv",
+        "samplingRate": "250.0",
+    }
+
+
+@pytest.mark.parametrize("name", ["eeg.csv", "EEG.TSV", "rec.txt", "Rec.Csv", "eeg.csv "])
+async def test_inspect_file_csv_without_rate_fails_clearly_before_request(name):
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        return httpx.Response(200, json=_DESCRIBE_PAYLOAD)
+
+    async with Client(make_server(handler)) as c:
+        with pytest.raises(ToolError) as excinfo:
+            await c.call_tool("data.inspect_file", {"path": f"user_1/abc/{name}"})
+    text = str(excinfo.value)
+    assert "sampling_rate is required" in text
+    assert "code: nimbus.mcp.sampling_rate_required, correlationId: " in text
+    assert calls == []
+
+
+@pytest.mark.parametrize("bad", [0, -5.0])
+async def test_inspect_file_rejects_invalid_rate(bad):
+    async with Client(make_server(lambda req: httpx.Response(200, json={}))) as c:
+        with pytest.raises(ToolError) as excinfo:
+            await c.call_tool(
+                "data.inspect_file", {"path": "user_1/abc/eeg.csv", "sampling_rate": bad}
+            )
+    assert "nimbus.mcp.sampling_rate_invalid" in str(excinfo.value)
+
+
+async def test_inspect_file_edf_needs_no_rate():
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(req.url.params)
+        return httpx.Response(200, json=_DESCRIBE_PAYLOAD)
+
+    async with Client(make_server(handler)) as c:
+        await c.call_tool("data.inspect_file", {"path": "user_1/abc/rec.edf"})
+    assert "samplingRate" not in seen["params"]

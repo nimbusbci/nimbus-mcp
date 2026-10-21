@@ -94,6 +94,9 @@ Three ways to give the server a credential — tried in this order at startup:
    out of process env and MCP configs), or the local pair
    `NIMBUS_MCP_KEY` / `NIMBUS_MCP_KEY_FILE` (must match `MCP_LOCAL_KEY` on a
    local backend — see below). Explicit env always beats files on disk.
+   A `NIMBUS_TOKEN` / `NIMBUS_TOKEN_FILE` token with `NIMBUS_API_URL` unset
+   talks to the hosted API (`https://nimbus-studio.fly.dev`); set
+   `NIMBUS_API_URL` to point it anywhere else.
 
 **No credential anywhere?** That is the **Local Free tier** — it works. The
 server starts anonymously against the local backend (desktop app or dev
@@ -118,7 +121,9 @@ setup shape, including how many days ago it expired.
 ```
 account.whoami() → {userId, email, plan: {isPro, pioneerAccess},
             freeRuns: {monthlyLimit, remaining},
-            token: {name, expiresAt, daysLeft} | {masked} | null,  # {masked} = gateway header token
+            token: {name, kind, scopes, fullAccess, expiresAt, daysLeft}
+                   | {masked, kind, scopes, fullAccess, expiresAt, daysLeft}  # gateway header token
+                   | null,
             source}                                      # store | env | token_file | header | …
 ```
 
@@ -137,6 +142,58 @@ the terminal equivalent with a live backend probe.
   snapshotted at mint time — after an upgrade, re-login (or revoke and re-create
   the token) to pick up the new plan. An expired token surfaces as setup
   guidance with the day count, not a dead end.
+
+### Headless agents and CI (API keys)
+
+For CI pipelines and unattended agents, mint a **CI key** in Nimbus Studio →
+Account → API tokens: choose type **CI / headless**, a lifetime of 90, 180 or
+365 days, and pick its scopes. **CI keys are a Pro feature** (Pro plan or
+Pioneer access); Free accounts can still use personal tokens.
+
+| Scope | Allows |
+|---|---|
+| `read` | GET/list/describe, plus compute-only POSTs (validate, plots, stats, export) |
+| `run` | start/cancel executions and experiments (consumes your quota) |
+| `write` | create/update/delete projects, pipelines, uploads, settings |
+| `leaderboard:submit` | leaderboard submissions |
+
+CI keys default to `read` + `run`; a full-access CI key is an explicit choice
+(the **Full access** checkbox, or `"fullAccess": true` on
+`POST /api/me/api-tokens`). Personal tokens keep the old default: no scope
+selected = full access, and every token minted before scopes existed keeps
+working unchanged. The backend enforces scopes on every request; a missing
+scope answers `403 nimbus.auth.token_scope_insufficient`. `account.whoami` and
+`nimbus-mcp status` show the key's kind, scopes and days left.
+
+Store the key as a CI secret and pass it as `NIMBUS_TOKEN` (no `NIMBUS_API_URL`
+needed — a token defaults to hosted Nimbus). GitHub Actions example:
+
+```yaml
+- name: Nimbus smoke run
+  env:
+    NIMBUS_TOKEN: ${{ secrets.NIMBUS_CI_KEY }}
+  run: |
+    pipx install nimbus-mcp
+    nimbus-mcp status          # fails fast if the key is expired or revoked
+```
+
+Or call the hosted gateway `https://nimbus-mcp.fly.dev/mcp` with the header
+`Authorization: Bearer $NIMBUS_TOKEN`. Rotate before expiry (the Account page
+flags keys within 14 days of expiring) and revoke a leaked key immediately —
+revocation takes effect on the next request.
+
+Plan and limits for API keys:
+
+- Plan is re-checked live: every request made with an API key looks up your
+  current Clerk Billing plan (cached for about a minute), so cancelling Pro
+  removes Pro features from existing keys too — not just from new ones.
+- If the owner of a CI key is no longer Pro, the key is refused on every
+  request with `403 nimbus.auth.ci_key_requires_pro`. Resubscribing makes it
+  work again (no need to re-mint); otherwise revoke it and switch to a
+  personal token.
+- You can have at most **20 active** (unrevoked, unexpired) API tokens;
+  minting one more answers `409 nimbus.me.api_token_limit_reached`. Tokens
+  created by MCP OAuth sign-in do not count toward this limit.
 
 ## Privacy & telemetry
 
@@ -213,8 +270,9 @@ pip install -e ".[test]"
 NIMBUS_MCP_KEY=choose-a-long-random-string python -m nimbus_mcp
 ```
 
-Env vars: `NIMBUS_API_URL` (default `http://127.0.0.1:8080`, or the store's
-`api_url` after a login), `NIMBUS_TOKEN` / `NIMBUS_TOKEN_FILE` (hosted API
+Env vars: `NIMBUS_API_URL` (always wins when set; otherwise the store's
+`api_url` after a login, `https://nimbus-studio.fly.dev` for a
+`NIMBUS_TOKEN` / `NIMBUS_TOKEN_FILE` token, else `http://127.0.0.1:8080`), `NIMBUS_TOKEN` / `NIMBUS_TOKEN_FILE` (hosted API
 token — see **Authentication**), `NIMBUS_MCP_KEY` (must match `MCP_LOCAL_KEY`),
 `NIMBUS_MCP_KEY_FILE` (path to a 0600 JSON file `{"key": "…"}` — the desktop
 app's one-click MCP setup writes it; consulted only when `NIMBUS_MCP_KEY` is
@@ -256,6 +314,41 @@ install locally via `uvx`).
 
 (A gateway started with `NIMBUS_TOKEN` in the environment uses it as the
 fallback for headerless calls — single-tenant self-hosting.)
+
+### OAuth sign-in (opt-in, `NIMBUS_MCP_OAUTH=1`)
+
+With `NIMBUS_MCP_OAUTH=1` the gateway is also an OAuth 2.1 authorization
+server (MCP authorization spec), so clients like Claude and Cursor can connect
+with just the URL — no pasted token:
+
+- `/.well-known/oauth-protected-resource/mcp` and
+  `/.well-known/oauth-authorization-server` metadata;
+- dynamic client registration (`/register`, stored by the backend);
+- `/authorize` (PKCE S256) sends the browser to Studio
+  `/mcp/authorize`, where the user signs in and chooses Allow / Deny;
+- `/token` exchanges the code for a normal `nimb_` token (30 days, no
+  refresh token; scopes `read`, `run`, `write`, `leaderboard:submit`, or full
+  access when all/none are requested). Re-authorizing the same client
+  revokes that client's previous token, and every OAuth token is listed (and
+  revocable) under Account → API tokens.
+
+When the flag is on, requests with no token get the spec `401` with a
+`WWW-Authenticate: Bearer resource_metadata=…` header (that is what starts the
+client's sign-in), so headerless `tools/list` is no longer public. Existing
+`X-Nimbus-Token` / `Authorization: Bearer nimb_…` headers keep working.
+
+| Variable | Where | Meaning |
+| --- | --- | --- |
+| `NIMBUS_MCP_OAUTH` | gateway | `1` turns OAuth on (default off) |
+| `MCP_OAUTH_GATEWAY_SECRET` | gateway **and** backend | shared secret (≥ 32 chars) for the gateway-only backend routes and for signing the consent request |
+| `NIMBUS_MCP_PUBLIC_URL` | gateway | issuer / public base URL (default `https://nimbus-mcp.fly.dev`; must be HTTPS except on loopback) |
+| `NIMBUS_STUDIO_URL` | gateway | where `/mcp/authorize` lives (default `https://studio.nimbusbci.com`) |
+| `NIMBUS_API_URL` | gateway | backend base URL |
+
+On Fly: `fly secrets set MCP_OAUTH_GATEWAY_SECRET=… NIMBUS_MCP_OAUTH=1` for the
+gateway app, and the same `MCP_OAUTH_GATEWAY_SECRET` on the backend. With the
+secret unset the backend answers the OAuth routes with `503
+nimbus.mcp.oauth_not_configured`.
 
 ## Claude Code
 
@@ -351,7 +444,12 @@ uploaded file on ANY backend (hosted or local):
 ```python
 data.inspect_file(path="/Users/you/recordings/session-01.edf")  # absolute → local file
 data.inspect_file(path="uploads/<user>/session-01.edf")         # data.upload path → upload
+data.inspect_file(path="uploads/<user>/eeg.csv", sampling_rate=250.0)  # CSV/TSV/TXT need a rate
 ```
+
+CSV/TSV/TXT carry no sampling rate, so `sampling_rate` (Hz) is required for
+them: without it the tool fails fast with `nimbus.mcp.sampling_rate_required`
+before any request is made.
 
 On a hosted backend absolute paths are refused — `data.inspect_file` then returns
 guidance (`data.upload` the file and pass the returned path back, or point

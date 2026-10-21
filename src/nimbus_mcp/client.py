@@ -13,6 +13,7 @@ from .config import McpConfig, load_config
 from .errors import McpToolError
 from .setup_mode import (
     SetupRequired,
+    desktop_app_not_running_guidance,
     local_mode_guidance,
     setup_guidance,
     token_rejected_guidance,
@@ -124,7 +125,10 @@ class NimbusClient:
         """Preflight hook for tools that do work outside the request path
         (campaign's ``run_experiment`` spawns a worker thread that would
         otherwise swallow a missing credential). Credentialed clients are a
-        no-op; :class:`NullClient` raises :class:`SetupRequired`. Anonymous
+        no-op here — the hosted token check lives in
+        :func:`nimbus_mcp.access.verify_hosted_credential`, called only by
+        ``experiment.run`` (cached), so polls never pay for it;
+        :class:`NullClient` raises :class:`SetupRequired`. Anonymous
         Local Free clients probe the local backend's health endpoint
         (bounded 2 s): unreachable -> the local-mode guidance, so a campaign
         never registers state for a backend that does not exist."""
@@ -133,7 +137,7 @@ class NimbusClient:
         try:
             httpx.get(f"{self.config.api_url}/health", timeout=2.0)
         except httpx.HTTPError:
-            raise SetupRequired(local_mode_guidance(None)) from None
+            raise SetupRequired(local_mode_guidance(None, self.config.api_url)) from None
         return None
 
     def credential_report(self) -> dict[str, Any]:
@@ -206,8 +210,16 @@ class NimbusClient:
             # No local backend to talk to and no local identity: the local
             # onboarding guidance (desktop app / dev key) is the actionable
             # answer — a raw connect error would dead-end Local Free users.
-            return SetupRequired(local_mode_guidance(None))
+            return SetupRequired(local_mode_guidance(None, self.config.api_url))
         url = self.config.api_url
+        if (
+            not self._token_mode
+            and self.config.credential_meta.get("source") == "desktop"
+            and not isinstance(err, httpx.TimeoutException)
+        ):
+            # Auto-discovered desktop key but nothing answers: the app is
+            # closed (or gone). Same onboarding payload, desktop-first lead.
+            return SetupRequired(desktop_app_not_running_guidance(url))
         timeout = getattr(self._http.timeout, "read", None) or getattr(
             self._http.timeout, "timeout", 300.0
         )
@@ -316,12 +328,18 @@ class NimbusClient:
         if not (isinstance(cid, str) and cid.strip()):
             cid = resp.headers.get("X-Correlation-ID")
         cid = cid.strip() if isinstance(cid, str) and cid.strip() else None
+        code = code if isinstance(code, str) and code else None
+        # Surface the stable backend code in the agent-visible text too (the
+        # tool error payload is only this message), next to the correlationId.
+        refs = [f"code: {code}"] if code else []
         if cid:
-            msg = f"{msg} (correlationId: {cid})"
+            refs.append(f"correlationId: {cid}")
+        if refs:
+            msg = f"{msg} ({', '.join(refs)})"
         return McpToolError(
             f"Nimbus API error {resp.status_code}: {msg}",
             status_code=resp.status_code,
-            code=code if isinstance(code, str) else None,
+            code=code,
             correlation_id=cid,
         )
 

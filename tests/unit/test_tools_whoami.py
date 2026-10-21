@@ -125,8 +125,9 @@ async def test_whoami_token_without_exp_claims_omits_expiry():
     )
     async with Client(server) as c:
         data = (await c.call_tool("account.whoami", {})).data
-    # nothing displayable is known about the token → null rather than a stub
-    assert data["token"] is None
+    # no exp → no expiry fields; kind/scopes still decode (PR-K1: a token
+    # without knd/scp is a personal, full-access token)
+    assert data["token"] == {"kind": "personal", "scopes": None, "fullAccess": True}
 
 
 async def test_whoami_gateway_reports_header_token_and_source():
@@ -159,3 +160,53 @@ async def test_whoami_gateway_reports_header_token_and_source():
     # beyond the mask itself.
     dumped = json.dumps(data)
     assert "nimb_gateway_token" not in dumped
+
+
+# ── PR-K1: token kind / scopes / expiry ─────────────────────────────────────
+
+
+async def test_whoami_shows_ci_kind_and_scopes():
+    exp = int(time.time()) + 300 * 86400
+    token = _fake_jwt_token({"exp": exp, "sub": "u", "knd": "ci", "scp": ["read", "run"]})
+    server = make_server(
+        lambda req: httpx.Response(200, json=_profile()), token=token, meta={"source": "env"}
+    )
+    async with Client(server) as c:
+        data = (await c.call_tool("account.whoami", {})).data
+    assert data["token"]["kind"] == "ci"
+    assert data["token"]["scopes"] == ["read", "run"]
+    assert data["token"]["fullAccess"] is False
+    assert data["token"]["daysLeft"] == 300
+
+
+async def test_whoami_legacy_token_is_personal_full_access():
+    token = _fake_jwt_token({"exp": int(time.time()) + 86400, "sub": "u"})
+    server = make_server(lambda req: httpx.Response(200, json=_profile()), token=token)
+    async with Client(server) as c:
+        data = (await c.call_tool("account.whoami", {})).data
+    assert data["token"]["kind"] == "personal"
+    assert data["token"]["scopes"] is None
+    assert data["token"]["fullAccess"] is True
+
+
+async def test_whoami_gateway_header_token_shows_kind_scopes_expiry():
+    from nimbus_mcp.hosted import HeaderCredentialClient
+
+    exp = int(time.time()) + 10 * 86400
+    token = _fake_jwt_token({"exp": exp, "sub": "u", "knd": "ci", "scp": ["read"]})
+    base = McpConfig(api_url="http://t", mcp_key="", export_dir=Path("/tmp/nx"))
+    gateway = HeaderCredentialClient(
+        base,
+        client_factory=lambda cfg: NimbusClient(
+            cfg, transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_profile()))
+        ),
+        headers_getter=lambda: {"x-nimbus-token": token},
+    )
+    server = FastMCP("t")
+    whoami_module.register(server, gateway)
+    async with Client(server) as c:
+        data = (await c.call_tool("account.whoami", {})).data
+    assert data["token"]["kind"] == "ci"
+    assert data["token"]["scopes"] == ["read"]
+    assert data["token"]["daysLeft"] == 10
+    assert token not in json.dumps(data)

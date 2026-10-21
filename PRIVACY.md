@@ -8,7 +8,7 @@ nimbus-mcp runs in a free local mode with **no Nimbus Studio login**:
 templates, your own data, local execution, plots/stats, BIDS export and
 local-only storage all work anonymously against the local backend (the
 Nimbus Studio desktop app or a local dev backend). Login is requested only
-at the first *cloud* feature (a leaderboard submission, verified or
+at the first _cloud_ feature (a leaderboard submission, verified or
 cross-machine experiment history, hosted compute, cloud sync,
 collaboration) — as an explicit prompt naming the reason, never as a
 blanket gate.
@@ -41,7 +41,9 @@ Base properties: client version, OS family, Python minor version.
 - Free-text error messages — errors travel as stable codes only
 - IP address / geolocation: the IP is sent empty (`$ip`) with geoip
   disabled, and no person profile is created
-  (`$process_person_profile: false`)
+  (`$process_person_profile: false`); the receiving PostHog project
+  (275296) also has server-side IP discard enabled, so the connecting IP
+  is not stored either
 
 Identity is a random install UUID stored in
 `~/.nimbus/telemetry-state.json`. It is **not** linked to your Nimbus
