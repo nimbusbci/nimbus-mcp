@@ -337,6 +337,9 @@ class HeaderCredentialClient:
     def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
         return self._call("put", path, json)
 
+    def patch(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        return self._call("patch", path, json)
+
     def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return self._call("delete", path, params)
 
@@ -362,3 +365,37 @@ class HeaderCredentialClient:
             for stale in self._retired:
                 stale.close()
             self._retired.clear()
+
+
+class StripUnboundSessionIdMiddleware:
+    """Pure ASGI: never mint ``Mcp-Session-Id`` on a failed session-less request.
+
+    E2E 2026-10-21: ``tools/call`` before ``initialize`` answered 400 "Missing
+    session ID" yet still carried a fresh ``Mcp-Session-Id`` header, inviting
+    clients to reuse a session that was never initialized.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        had_session = any(k.lower() == b"mcp-session-id" for k, _ in scope.get("headers") or [])
+
+        async def _send(message: Any) -> None:
+            if (
+                not had_session
+                and message.get("type") == "http.response.start"
+                and int(message.get("status", 200)) >= 400
+            ):
+                message = dict(message)
+                message["headers"] = [
+                    (k, v)
+                    for k, v in message.get("headers") or []
+                    if k.lower() != b"mcp-session-id"
+                ]
+            await send(message)
+
+        await self.app(scope, receive, _send)

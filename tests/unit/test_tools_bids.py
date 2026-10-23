@@ -117,3 +117,31 @@ async def test_export_dataset_missing_manifest_raises(tmp_path):
             raised = True
             assert "manifest" in str(e)
         assert raised
+
+
+async def test_export_execution_hosted_returns_inline_and_writes_nothing(tmp_path, monkeypatch):
+    """E2E round 2: hosted returned a gateway-local /tmp/nimbus-exports path."""
+    import base64
+
+    monkeypatch.setattr(bids, "is_hosted_gateway", lambda _c: True)
+    data = _zip_bytes()
+    async with Client(make_server(lambda req: httpx.Response(200, content=data), tmp_path)) as c:
+        result = await c.call_tool("bids.export_execution", {"execution_id": "exec_9"})
+    assert "path" not in result.data
+    assert base64.b64decode(result.data["contentBase64"]) == data
+    assert result.data["filename"] == "exec_9-bids.zip" and result.data["tier"] == "derivative"
+    assert not (tmp_path / "bids").exists()
+
+
+async def test_export_dataset_hosted_over_cap_points_to_studio(tmp_path, monkeypatch):
+    from nimbus_mcp.tools import _hosted_files
+
+    monkeypatch.setattr(bids, "is_hosted_gateway", lambda _c: True)
+    monkeypatch.setattr(_hosted_files, "HOSTED_INLINE_MAX_BYTES", 4)
+    async with Client(
+        make_server(lambda req: httpx.Response(200, content=_zip_bytes()), tmp_path)
+    ) as c:
+        result = await c.call_tool("bids.export_dataset", {"dataset": "BNCI2014_001"})
+    assert "contentBase64" not in result.data and "Nimbus Studio" in result.data["note"]
+    assert result.data["subjects"] == ["S01"]
+    assert not (tmp_path / "bids").exists()

@@ -36,8 +36,9 @@ from ..access import (
     verify_hosted_credential,
 )
 from ..client import McpToolError, NimbusClient
+from ..errors import local_tool_error
 from ..setup_mode import SetupRequired
-from ._annotations import MUTATING, READ_ONLY
+from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
 from ._guards import safe_segment
 from .run import _METRIC_KEYS, synth_layout
 
@@ -203,6 +204,25 @@ class Experiments:
                 del self._states[key]
                 self._fingerprints.pop(key, None)
 
+    def remove(self, fingerprint: str, experiment_id: str) -> str:
+        """Drop an experiment from memory + disk: "removed" | "running" | "missing"."""
+        key = self.key(fingerprint, experiment_id)
+        with self.lock:
+            state = self._states.get(key)
+            if state is not None and state.status not in _TERMINAL:
+                return "running"
+            found = self._states.pop(key, None) is not None
+            self._fingerprints.pop(key, None)
+        path = _experiment_disk_dir(fingerprint) / f"{experiment_id}.json"
+        try:
+            path.unlink()
+            found = True
+        except FileNotFoundError:
+            pass
+        except OSError as err:
+            logger.warning("Could not remove experiment %s: %s", experiment_id, err)
+        return "removed" if found else "missing"
+
     def snapshot(self, fingerprint: str, experiment_id: str) -> dict[str, Any] | None:
         """Return the raw payload; ``experiment.get`` runs kind backfill with client."""
         with self.lock:
@@ -290,9 +310,7 @@ def _refresh_server_snapshot(snapshot: dict[str, Any], client: NimbusClient) -> 
             row["status"] = "failed"
             row["error"] = summary.get("errorMessage") or f"terminal status: {status}"
             changed = True
-    if changed and all(
-        isinstance(row, dict) and row.get("status") in _TERMINAL for row in rows
-    ):
+    if changed and all(isinstance(row, dict) and row.get("status") in _TERMINAL for row in rows):
         run_rows = [
             RunRow(
                 name=str(row.get("name") or ""),
@@ -578,15 +596,9 @@ def _kind_signals_from_payload_run(
     """Extract (method, n_groups, group_kind) from a serialized run row."""
     metrics = run.get("metrics") if isinstance(run.get("metrics"), dict) else {}
     method_raw = (
-        run.get("evaluationMethod")
-        or metrics.get("evaluationMethod")
-        or metrics.get("method")
+        run.get("evaluationMethod") or metrics.get("evaluationMethod") or metrics.get("method")
     )
-    method = (
-        str(method_raw).strip().lower()
-        if method_raw not in (None, "")
-        else None
-    )
+    method = str(method_raw).strip().lower() if method_raw not in (None, "") else None
     n_groups = _coerce_n_groups(metrics.get("nGroups") if metrics else None)
     group_kind_raw = run.get("groupKind") or metrics.get("groupKind")
     group_kind = (
@@ -696,9 +708,7 @@ def _enrich_payload_runs_kind_signals(
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict):
             continue
-        fetched_method, _fetched_n, fetched_kind = _kind_signals_from_execution_result(
-            result
-        )
+        fetched_method, _fetched_n, fetched_kind = _kind_signals_from_execution_result(result)
         if fetched_method and not run.get("evaluationMethod"):
             run["evaluationMethod"] = fetched_method
         if fetched_kind and not run.get("groupKind"):
@@ -923,7 +933,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # both of which need the 'run' scope.
         require_token_scope(client, "run", "experiment.run (POST /api/execute)")
         if not runs:
-            raise McpToolError("experiment.run needs at least 1 run (got 0).")
+            raise local_tool_error(
+                "experiment.run needs at least 1 run (got 0).",
+                code="nimbus.experiment.invalid_request",
+            )
         if len(runs) > MAX_RUNS:
             raise McpToolError(
                 f"experiment.run accepts at most {MAX_RUNS} runs (got {len(runs)}). "
@@ -1027,6 +1040,44 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "with the same account; the record is stored on the Nimbus server.",
         }
 
+    @mcp.tool(name="experiment.delete", annotations=DESTRUCTIVE)
+    def delete_experiment(experiment_id: str, confirm: bool = False) -> dict[str, Any]:
+        """Delete one of your experiment records (server + this machine's local
+        cache). Its individual runs are kept — delete them with execution.delete.
+        A still-running experiment cannot be deleted.
+
+        Args:
+            experiment_id: The experiment to delete (from experiment.run).
+            confirm: MUST be true to delete — the explicit user go-ahead.
+        """
+        client.ensure_ready()
+        exp_id = safe_segment(experiment_id, label="experiment id")
+        if not confirm:
+            return {
+                "deleted": False,
+                "message": "Refusing to delete an experiment: pass confirm=true to proceed.",
+            }
+        local = EXPERIMENTS.remove(client.credential_fingerprint(), exp_id)
+        if local == "running":
+            raise local_tool_error(
+                f"Experiment '{exp_id}' is still running; wait for it to finish "
+                "(experiment.get), then delete it.",
+                code="nimbus.experiment.running",
+            )
+        server = True
+        try:
+            client.delete(f"/api/experiments/{exp_id}")
+        except McpToolError as err:
+            if err.status_code != 404:
+                raise
+            server = False
+        if not server and local == "missing":
+            raise local_tool_error(
+                f"Unknown experiment '{exp_id}' for this account.",
+                code="nimbus.experiment.not_found",
+            )
+        return {"deleted": True, "experimentId": exp_id}
+
     @mcp.tool(name="experiment.get", annotations=READ_ONLY)
     def get_experiment(experiment_id: str) -> dict[str, Any]:
         """Experiment snapshot: status (running/completed/failed), per-run rows
@@ -1064,7 +1115,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             # shared store; local memory/disk are only this process's cache.
             snapshot = _fetch_server_experiment(client, exp_id)
         if snapshot is None:
-            raise McpToolError(
+            raise local_tool_error(
                 f"Unknown experiment '{exp_id}'. No record for this "
                 "account/token was found in this process, in this machine's "
                 "local experiment store, or on the Nimbus server. The id may "
@@ -1073,7 +1124,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "predate server-side experiment storage — those exist only "
                 "in the origin machine's local store. If it was just "
                 "started elsewhere, retry in a moment; otherwise re-run it "
-                "from an entry point signed in with the same account."
+                "from an entry point signed in with the same account.",
+                code="nimbus.experiment.not_found",
             )
         # Recompute kindBreakdown (and enrich unstamped legacy rows from
         # /api/result) so classification matches stats.grouped on the same ids.

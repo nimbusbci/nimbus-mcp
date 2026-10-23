@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 from typing import Any
 
@@ -27,7 +28,54 @@ _METRIC_KEYS = (
     "rejectionRate",
     "generalizationGapPct",
     "nGroups",
+    "headlineMetric",
+    "chanceLevelPct",
+    "classBalance",
 )
+
+
+def metric_warning(metrics: dict[str, Any]) -> str | None:
+    """Agent-visible caveat when the headline is in-sample or near chance."""
+    head = metrics.get("headlineMetric")
+    if not isinstance(head, dict) or not isinstance(head.get("valuePct"), (int, float)):
+        return None
+    notes: list[str] = []
+    if head.get("isInSample"):
+        notes.append(
+            "headline is IN-SAMPLE (training data, no held-out split) — add an "
+            "evaluation_plan or use mode 'both' for an honest estimate"
+        )
+    chance = metrics.get("chanceLevelPct")
+    key = head.get("key")
+    # Balanced accuracy's chance level is 100/k, not the majority rate.
+    if key == "balancedAccuracy" and isinstance(metrics.get("classBalance"), dict):
+        k = len(metrics["classBalance"]) or 2
+        chance = 100.0 / k
+    if isinstance(chance, (int, float)) and float(head["valuePct"]) - float(chance) < 5.0:
+        notes.append(
+            f"headline {head['valuePct']:.1f}% is within 5 points of chance ({chance:.1f}%)"
+        )
+    # Plain accuracy vs the majority-class rate (E2E r3: a P300 run with 83.6%
+    # accuracy at 83.3% majority chance had warning=null because the headline
+    # was balanced accuracy, compared against 100/k instead).
+    majority = metrics.get("chanceLevelPct")
+    if isinstance(majority, (int, float)):
+        for acc_key in ("evalAccuracyPct", "accuracyPct"):
+            acc = metrics.get(acc_key)
+            if acc_key == head.get("key") or not isinstance(acc, (int, float)):
+                continue
+            if float(acc) - float(majority) < 5.0 and not (
+                head.get("key") in ("accuracy", "evalAccuracy")
+                and isinstance(chance, (int, float))
+                and abs(float(chance) - float(majority)) < 1e-9
+                and float(head["valuePct"]) - float(chance) < 5.0
+            ):
+                notes.append(
+                    f"{acc_key} {float(acc):.1f}% is within 5 points of the majority-class "
+                    f"rate ({float(majority):.1f}%) — the model may be predicting one class"
+                )
+            break
+    return "; ".join(notes) or None
 
 
 def _compute_origin_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -43,6 +91,11 @@ def _compute_origin_from_row(row: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+_ERROR_REFS = re.compile(
+    r"\(code:\s*(?P<code>[\w.\-]+)(?:,\s*correlationId:\s*(?P<cid>[\w\-]+))?\)"
+)
+
+
 def _trim_summary(row: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "executionId",
@@ -53,6 +106,7 @@ def _trim_summary(row: dict[str, Any]) -> dict[str, Any]:
         "errorMessage",
         "hasArtifacts",
         "dataset",
+        "datasetId",
         "subject",
         "paradigm",
         "nTrain",
@@ -61,6 +115,25 @@ def _trim_summary(row: dict[str, Any]) -> dict[str, Any]:
         "chancePct",
     )
     trimmed = {k: row.get(k) for k in keys if row.get(k) is not None}
+    # Contract: ``dataset`` is the human-readable display label (e.g. "BCIIV2a");
+    # ``datasetId`` is the catalog id (e.g. "BNCI2014_001") that other tools accept.
+    # Both pass through unchanged.
+    # Run title: the name shown in Studio's run history (pipelineName).
+    if row.get("pipelineName"):
+        trimmed["title"] = row["pipelineName"]
+    # Separate errorCode / correlationId fields (E2E 2026-10-21: only in the text).
+    code = row.get("errorCode")
+    cid = row.get("correlationId")
+    msg = row.get("errorMessage")
+    if isinstance(msg, str):
+        match = _ERROR_REFS.search(msg)
+        if match:
+            code = code or match.group("code")
+            cid = cid or match.group("cid")
+    if code:
+        trimmed["errorCode"] = code
+    if cid:
+        trimmed["correlationId"] = cid
     if row.get("metrics"):
         trimmed["metrics"] = {
             k: row["metrics"][k] for k in _METRIC_KEYS if row["metrics"].get(k) is not None
@@ -200,6 +273,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         If an identical graph is already running for you, the run still starts but
         the response carries a ``warning`` + ``duplicateOf`` ids (cancel one with
         execution.cancel to avoid paying twice).
+        The server runs a limited number of executions at once (3 by default); when
+        all slots are busy the call fails immediately with 429
+        nimbus.execution.queue_full and a retryAfter (seconds) — wait, then retry.
 
         Args:
             train_graph: Pipeline graph {nodes: [{id, type, config}], connections:
@@ -249,9 +325,34 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         exec_id = safe_segment(execution_id)
         return client.post("/api/cancel", json={"executionId": exec_id})
 
+    @mcp.tool(name="execution.delete", annotations=DESTRUCTIVE)
+    def delete_execution(execution_id: str, confirm: bool = False) -> dict[str, Any]:
+        """Permanently delete one of your finished runs (completed/failed/cancelled)
+        with its results. Running runs must be cancelled first (409
+        nimbus.execution.delete_not_terminal). Owner only.
+
+        Args:
+            execution_id: The run to delete (from execution.run/execution.list).
+            confirm: MUST be true to delete — the explicit user go-ahead.
+        """
+        exec_id = safe_segment(execution_id)
+        if not confirm:
+            return {
+                "deleted": False,
+                "message": "Refusing to delete a run: pass confirm=true to proceed. "
+                "Check the id with execution.get first.",
+            }
+        payload = client.delete(f"/api/executions/{exec_id}")
+        return {"deleted": bool(payload.get("deleted", True)), "executionId": exec_id}
+
     @mcp.tool(name="execution.get", annotations=READ_ONLY)
     def get_execution(execution_id: str) -> dict[str, Any]:
         """Execution status summary (status: running/completed/failed/cancelled).
+
+        Summary fields: ``dataset`` is the human-readable display label
+        (e.g. "BCIIV2a"); ``datasetId`` is the catalog id (e.g. "BNCI2014_001")
+        accepted by other tools (data.inspect_dataset, public_data.dataset).
+        ``title`` is the run name shown in Studio.
 
         Args:
             execution_id: The run to check (from execution.run/execution.list).
@@ -263,6 +364,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
     @mcp.tool(name="execution.list", annotations=READ_ONLY)
     def list_executions(limit: int = 20, status: str | None = None) -> dict[str, Any]:
         """Recent executions. Optional status filter (running/completed/failed/cancelled).
+
+        Per-run fields: ``dataset`` is the human-readable display label
+        (e.g. "BCIIV2a"); ``datasetId`` is the catalog id (e.g. "BNCI2014_001")
+        accepted by other tools (data.inspect_dataset, public_data.dataset).
+        ``title`` is the run name shown in Studio.
 
         Args:
             limit: Maximum number of runs to return (default 20).
@@ -293,6 +399,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         trimmed: dict[str, Any] = {
             "executionId": exec_id,
             "metrics": {k: metrics[k] for k in _METRIC_KEYS if metrics.get(k) is not None},
+            "warning": metric_warning(metrics),
             "confusionMatrix": result.get("confusionMatrix"),
             "confusionMatrixLabels": result.get("confusionMatrixLabels"),
             "evalConfusionMatrix": result.get("evalConfusionMatrix"),

@@ -54,6 +54,16 @@ _HOSTED_LOCAL_OPTIONS: list[dict[str, str]] = [
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
+    def _default_subject(dataset: str) -> str | None:
+        """Catalog ``defaultSubject`` for ``dataset`` (E2E 2026-10-21), else None."""
+        try:
+            index = client.get("/api/public-datasets/index")
+        except McpToolError:
+            return None
+        entry = (index.get("datasets") or {}).get(dataset) if isinstance(index, dict) else None
+        value = entry.get("defaultSubject") if isinstance(entry, dict) else None
+        return str(value) if value else None
+
     @mcp.tool(name="data.inspect_dataset", annotations=READ_ONLY)
     def inspect_dataset(
         dataset: str,
@@ -67,8 +77,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Look at the data BEFORE building pipelines: class balance drives
         stratification choices (imbalanced classes skew accuracy), and
         flatlined channels mean a montage/reference problem worth fixing
-        first. subject is REQUIRED (the backend 400s without it) — get the
-        subject list via catalog.datasets, e.g. "S01"; a comma-list like
+        first. subject defaults to the dataset's catalog ``defaultSubject``
+        (see catalog.datasets), e.g. "S01"; a comma-list like
         "S01,S03" loads a cohort. mode: training | evaluation | all.
         Units note: values are ASSUMED volts by the loader — a µV-native file
         reads 1e6x too large; set unitsScale in a pipeline's custom_data
@@ -76,10 +86,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
 
         Args:
             dataset: Dataset id from catalog.datasets (e.g. "BNCI2014_001").
-            subject: REQUIRED subject code ("S01") or comma-list cohort ("S01,S03").
+            subject: Subject code ("S01") or comma-list cohort ("S01,S03"); defaults to
+                the catalog defaultSubject.
             mode: Which split to summarize — training | evaluation | all.
         """
         params: dict[str, Any] = {"source": "dataset", "dataset": dataset, "mode": mode}
+        if subject is None:
+            subject = _default_subject(dataset)
         if subject is not None:
             params["subject"] = subject
         return client.get("/api/data/describe", params=params)

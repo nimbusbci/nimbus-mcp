@@ -102,6 +102,7 @@ def test_authorization_bearer_form_accepted() -> None:
 # forward Authorization: Bearer Bearer nimb_… and the auth layer would reject
 # every call from such a client.
 
+
 def test_x_nimbus_token_bearer_prefix_is_stripped() -> None:
     proxy, made = _client({"x-nimbus-token": "Bearer nimb_x"})
     assert proxy.get("/x") == {"ok": True, "token": "nimb_x"}
@@ -145,9 +146,10 @@ def test_post_forwards_allow_422_to_the_token_client() -> None:
         client_factory=lambda cfg: NimbusClient(cfg, transport=httpx.MockTransport(handler)),
         headers_getter=lambda: {"x-nimbus-token": "nimb_validate"},
     )
-    assert proxy.post(
-        "/api/protocols/validate", json={"spec": {}}, allow_422=True
-    ) == {"valid": False, "errors": [{"msg": "bad"}]}
+    assert proxy.post("/api/protocols/validate", json={"spec": {}}, allow_422=True) == {
+        "valid": False,
+        "errors": [{"msg": "bad"}],
+    }
 
 
 def test_x_nimbus_token_bearer_only_value_is_no_credential() -> None:
@@ -158,6 +160,7 @@ def test_x_nimbus_token_bearer_only_value_is_no_credential() -> None:
 
 
 # ── credential_report: truthful per-request identity for whoami ────────────
+
 
 def test_credential_report_header_token_masked() -> None:
     proxy, _ = _client({"x-nimbus-token": "nimb_gateway_token"})
@@ -336,6 +339,7 @@ def test_hosted_guidance_shape_matches_spec() -> None:
 # run. bound_client() yields a token-bound client the worker owns for its
 # lifetime — the header getter is never consulted inside the worker.
 
+
 def test_bound_client_works_after_request_context_gone() -> None:
     """The bound client keeps working once the header getter goes empty (the
     worker-thread situation) and is closed when the context exits."""
@@ -374,6 +378,7 @@ def test_bound_client_discard_closes_without_the_context_running() -> None:
 
 
 # ── eviction must not close clients other threads are using ────────────────
+
 
 def test_eviction_retires_before_closing() -> None:
     """At the client cap, eviction drops cache references but closes only the
@@ -417,6 +422,7 @@ def test_eviction_retires_before_closing() -> None:
 # fastmcp's get_http_headers strips credential headers (authorization, cookie)
 # by default; a plain default getter makes the Bearer fallback below
 # unreachable on the real gateway. Pin the default against real fastmcp.
+
 
 def test_default_headers_getter_includes_authorization() -> None:
     from fastmcp.server import dependencies as dep

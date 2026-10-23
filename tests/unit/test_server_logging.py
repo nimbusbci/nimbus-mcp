@@ -19,8 +19,13 @@ def _record(exc: BaseException) -> logging.LogRecord:
     except BaseException:  # noqa: BLE001
         info = sys.exc_info()
     return logging.LogRecord(
-        "fastmcp.server.server", logging.ERROR, __file__, 1,
-        "Error calling tool %r", ("catalog.templates",), info,
+        "fastmcp.server.server",
+        logging.ERROR,
+        __file__,
+        1,
+        "Error calling tool %r",
+        ("catalog.templates",),
+        info,
     )
 
 
@@ -52,8 +57,13 @@ def test_real_bug_inside_except_mcp_tool_error_keeps_traceback_at_error():
     except KeyError:
         info = sys.exc_info()
     rec = logging.LogRecord(
-        "fastmcp.server.server", logging.ERROR, __file__, 1,
-        "Error calling tool %r", ("x",), info,
+        "fastmcp.server.server",
+        logging.ERROR,
+        __file__,
+        1,
+        "Error calling tool %r",
+        ("x",),
+        info,
     )
     assert ExpectedConditionLogFilter().filter(rec) is True
     assert rec.exc_info is not None

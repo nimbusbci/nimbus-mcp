@@ -40,6 +40,7 @@ class TierUnverifiable(McpToolError):
     either way, so the call stops with an honest connectivity error.
     """
 
+
 MODE_ANONYMOUS = "anonymous"
 MODE_LOCAL = "local"
 MODE_HOSTED = "hosted"

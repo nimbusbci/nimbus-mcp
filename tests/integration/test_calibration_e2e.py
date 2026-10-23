@@ -136,9 +136,7 @@ def _server(bearer: str):
 async def test_start_refuses_without_confirm():
     """The confirm gate refuses before any HTTP leaves the process."""
     async with Client(_server("unused-local-bearer")) as c:
-        result = await c.call_tool(
-            "calibration.start", {"paradigm": "mi", "trials_per_class": 5}
-        )
+        result = await c.call_tool("calibration.start", {"paradigm": "mi", "trials_per_class": 5})
     assert result.data["started"] is False
     assert "confirm" in result.data["message"]
 

@@ -33,9 +33,7 @@ def init_gateway_sentry() -> bool:
 
     sentry_sdk.init(
         dsn=dsn,
-        environment=(
-            os.environ.get("SENTRY_ENVIRONMENT", "").strip() or "production"
-        ),
+        environment=(os.environ.get("SENTRY_ENVIRONMENT", "").strip() or "production"),
         release=f"nimbus-mcp@{__version__}",
         send_default_pii=False,
         traces_sample_rate=traces,

@@ -63,9 +63,13 @@ def test_annotation_policy_invariants():
     assert destructive == {
         "data.delete_upload",
         "execution.cancel",
+        "execution.delete",
+        "experiment.delete",
         "project.delete",
         "stream.stop",
     }
+    assert tools["project.rename"].annotations.destructive_hint is False
+    assert tools["project.rename"].annotations.read_only_hint is False
     # The two rail-gated tools must not claim read-only.
     assert tools["stream.start"].annotations.read_only_hint is False
     assert tools["execution.run"].annotations.read_only_hint is False
@@ -117,4 +121,4 @@ def test_annotation_policy_invariants():
 def test_tool_count_is_tracked():
     # A new tool must update this number AND pass the suites above — the count
     # is asserted so additions are conscious.
-    assert len(_all_tools()) == 60
+    assert len(_all_tools()) == 63

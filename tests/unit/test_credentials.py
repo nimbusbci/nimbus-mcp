@@ -485,8 +485,12 @@ def test_env_api_url_override_warning_survives_bad_port(tmp_path, capsys, bad_si
     token-mode startup: ``urlsplit`` itself does not raise (``.port`` does,
     lazily), so the check sees differing origins and the warning prints with a
     degraded host label — resolution continues with the env URL."""
-    store_api = "https://store.example.com:badport" if bad_side == "store" else "https://store.example.com"
-    env_api = "https://env.example.com" if bad_side == "store" else "https://env.example.com:badport"
+    store_api = (
+        "https://store.example.com:badport" if bad_side == "store" else "https://store.example.com"
+    )
+    env_api = (
+        "https://env.example.com" if bad_side == "store" else "https://env.example.com:badport"
+    )
     write_store(token="nimb_stored", api_url=store_api, home=tmp_path)
     cred = resolve_credential(env={"NIMBUS_API_URL": env_api}, home=tmp_path, platform="darwin")
     assert cred.kind == "token"

@@ -85,11 +85,13 @@ def assert_is_guidance(data: dict) -> None:
             "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
         ]
         return
-    assert sorted(actions) == sorted([
-        "nimbus-mcp login",
-        "start the Nimbus Studio desktop app",
-        "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
-    ])
+    assert sorted(actions) == sorted(
+        [
+            "nimbus-mcp login",
+            "start the Nimbus Studio desktop app",
+            "set NIMBUS_MCP_KEY / NIMBUS_MCP_KEY_FILE",
+        ]
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -118,9 +120,9 @@ async def test_setup_mode_guidance_from_three_tool_families(monkeypatch):
             ("execution.run", {"train_graph": TRAIN_GRAPH}),
             ("device.list", {}),
         ):
-            result = await c.call_tool(name, args)
-            assert not result.is_error
-            data = result.data
+            result = await c.call_tool(name, args, raise_on_error=False)
+            assert result.is_error  # the tool did not run (E2E 2026-10-21)
+            data = result.structured_content
             assert data["ok"] is False and data["setupRequired"] is True
             # local flavour: no login is demanded for local work
             assert "no login needed" in data["message"]
@@ -169,14 +171,18 @@ async def test_setup_mode_experiment_tools_preflight_before_worker(monkeypatch):
     server = build_server()  # isolated env -> anonymous; backend unreachable
     async with Client(server) as c:
         result = await c.call_tool(
-            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run",
+            {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]},
+            raise_on_error=False,
         )
-        assert not result.is_error
-        assert_is_guidance(result.data)
+        assert result.is_error
+        assert_is_guidance(result.structured_content)
 
-        poll = await c.call_tool("experiment.get", {"experiment_id": "anything"})
-        assert not poll.is_error
-        assert_is_guidance(poll.data)
+        poll = await c.call_tool(
+            "experiment.get", {"experiment_id": "anything"}, raise_on_error=False
+        )
+        assert poll.is_error
+        assert_is_guidance(poll.structured_content)
     # nothing was registered and no worker thread was spawned
     assert set(campaign.EXPERIMENTS._states) == before
 
@@ -194,11 +200,13 @@ async def test_401_expired_token_returns_guidance_with_days_expired():
     )
     server = build_server(client)
     async with Client(server) as c:
-        result = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
-    assert_is_guidance(result.data)
-    assert result.data["daysExpired"] == 3
-    assert "expired 3 day" in result.data["message"]
-    assert result.data["options"][0]["action"] == "nimbus-mcp login"
+        result = await c.call_tool(
+            "execution.run", {"train_graph": TRAIN_GRAPH}, raise_on_error=False
+        )
+    assert_is_guidance(result.structured_content)
+    assert result.structured_content["daysExpired"] == 3
+    assert "expired 3 day" in result.structured_content["message"]
+    assert result.structured_content["options"][0]["action"] == "nimbus-mcp login"
 
 
 async def test_401_revoked_token_reports_days_left():
@@ -209,10 +217,10 @@ async def test_401_revoked_token_reports_days_left():
     )
     server = build_server(client)
     async with Client(server) as c:
-        result = await c.call_tool("catalog.templates", {})
-    assert_is_guidance(result.data)
-    assert result.data["daysLeft"] == 10
-    assert "revoked" in result.data["message"]
+        result = await c.call_tool("catalog.templates", {}, raise_on_error=False)
+    assert_is_guidance(result.structured_content)
+    assert result.structured_content["daysLeft"] == 10
+    assert "revoked" in result.structured_content["message"]
 
 
 def test_401_undecodable_token_still_guides_to_login():

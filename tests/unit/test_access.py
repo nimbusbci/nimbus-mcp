@@ -169,9 +169,7 @@ async def test_submit_hosted_free_unverified_is_explicit_not_faked(tmp_path):
             },
         )
         assert result.data["ok"] is False
-        assert result.data["unsupported"] == (
-            "unverified_local_submissions_not_yet_supported"
-        )
+        assert result.data["unsupported"] == ("unverified_local_submissions_not_yet_supported")
         assert posts == []  # no fake row was created
 
 
@@ -260,9 +258,7 @@ async def test_foundation_compare_local_mode_not_gated(tmp_path):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/foundation/compare"
-        return httpx.Response(
-            200, json={"image": png, "title": "t", "meta": {"results": []}}
-        )
+        return httpx.Response(200, json={"image": png, "title": "t", "meta": {"results": []}})
 
     client = _client(tmp_path, handler, key="k")
     server = build_server(client)
@@ -284,9 +280,7 @@ def _gateway(tmp_path: Path, pro_tokens: set[str], posts: list, current: dict):
 
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/api/me/profile":
-                return httpx.Response(
-                    200, json={"capabilities": {"isPro": token in pro_tokens}}
-                )
+                return httpx.Response(200, json={"capabilities": {"isPro": token in pro_tokens}})
             posts.append(token)
             return httpx.Response(200, json={"submissionId": "s", "status": "queued"})
 
@@ -345,9 +339,10 @@ async def test_expired_token_gets_relogin_not_upgrade(tmp_path):
         result = await c.call_tool(
             "leaderboard.submit",
             {"dataset_id": "BNCI2014_001", "name": "m", "code": CODE},
+            raise_on_error=False,
         )
-    assert result.data["setupRequired"] is True
-    assert "tierGate" not in result.data
+    assert result.structured_content["setupRequired"] is True
+    assert "tierGate" not in result.structured_content
 
 
 def test_profile_failure_is_unverifiable_and_not_cached(tmp_path):

@@ -194,6 +194,10 @@ class NimbusClient:
         of raising, so callers can implement optimistic-revision retries."""
         return self._request("PUT", path, json=json, allow_409=True)
 
+    def patch(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        """PATCH; >=400 raises."""
+        return self._request("PATCH", path, json=json)
+
     def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """DELETE; >=400 raises like every other verb (404 = already gone)."""
         return self._request("DELETE", path, params=params)
@@ -225,9 +229,7 @@ class NimbusClient:
         )
         if isinstance(err, httpx.TimeoutException):
             if self._token_mode:
-                return McpToolError(
-                    _TIMEOUT_HINT_HOSTED.format(url=url, timeout=timeout)
-                )
+                return McpToolError(_TIMEOUT_HINT_HOSTED.format(url=url, timeout=timeout))
             return McpToolError(_TIMEOUT_HINT_LOCAL.format(url=url))
         if self._token_mode:
             return McpToolError(_HOSTED_DOWN_HINT.format(url=url))
@@ -331,7 +333,10 @@ class NimbusClient:
         code = code if isinstance(code, str) and code else None
         # Surface the stable backend code in the agent-visible text too (the
         # tool error payload is only this message), next to the correlationId.
+        retry_after = _retry_after_seconds(body, resp.headers.get("Retry-After"))
         refs = [f"code: {code}"] if code else []
+        if retry_after is not None:
+            refs.append(f"retryAfter: {retry_after}s")
         if cid:
             refs.append(f"correlationId: {cid}")
         if refs:
@@ -341,7 +346,21 @@ class NimbusClient:
             status_code=resp.status_code,
             code=code,
             correlation_id=cid,
+            retry_after=retry_after,
         )
+
+
+def _retry_after_seconds(body: Any, header: str | None) -> int | None:
+    """Integer seconds from the body ``retryAfter`` or the ``Retry-After`` header."""
+    raw = body.get("retryAfter") if isinstance(body, dict) else None
+    for value in (raw, header):
+        try:
+            seconds = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if seconds > 0:
+            return seconds
+    return None
 
 
 class NullClient:
@@ -399,6 +418,9 @@ class NullClient:
         raise self._setup_required()
 
     def put(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        raise self._setup_required()
+
+    def patch(self, path: str, json: dict[str, Any] | None = None) -> Any:
         raise self._setup_required()
 
     def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:

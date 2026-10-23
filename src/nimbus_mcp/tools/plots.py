@@ -23,6 +23,7 @@ from fastmcp.utilities.types import Image
 from ..client import McpToolError, NimbusClient
 from ._annotations import FIGURE_OUTPUT_SCHEMA, LOCAL_WRITE
 from ._guards import safe_segment
+from ._hosted_files import is_hosted_gateway
 
 _PLOT_KINDS = ("psd", "topomap", "bandpower", "spectrogram")
 _BANDS = ("delta", "theta", "alpha", "beta", "gamma")
@@ -66,7 +67,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "mimeType": payload.get("mimeType", "image/png"),
             "meta": meta,
         }
-        if save:
+        if save and is_hosted_gateway(client):
+            # Hosted: the gateway's disk is not the caller's; the PNG is already
+            # returned inline as the image content block.
+            info["note"] = "save is ignored on the hosted gateway; the image is returned inline."
+        elif save:
             info.update(_save_png(png, stem, client.config.export_dir))
         # Image as content block (the assistant LOOKS at it); sidecar as
         # structuredContent typed by FIGURE_OUTPUT_SCHEMA.
@@ -87,7 +92,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             execution_id: Run to plot (from execution.run / execution.results).
             matrix: "eval" (held-out, default) or "train" (fit-set / cross-validation).
                 CV and evaluation-plan runs often have no eval matrix — use "train".
-            save: Also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return its path.
+            save: Local/stdio: also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return
+                its path. Ignored on the hosted gateway (the image is returned inline).
         """
         exec_id = safe_segment(execution_id)
         if matrix not in ("eval", "train"):
@@ -125,7 +131,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             path: Upload path (source=upload) or absolute local path (source=local).
             band: Band for kind=topomap: delta|theta|alpha|beta|gamma (default alpha).
             channel_idx: 0-based channel for kind=spectrogram (default 0).
-            save: Also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return its path.
+            save: Local/stdio: also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return
+                its path. Ignored on the hosted gateway (the image is returned inline).
         """
         if kind not in _PLOT_KINDS:
             raise McpToolError(f"kind must be one of {_PLOT_KINDS}; got {kind!r}.")
@@ -170,7 +177,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             mode: Pack split to load: training | evaluation | all (source=dataset).
             path: Upload path (source=upload) or absolute local path (source=local).
             max_channels: Channels drawn per class subplot (default 16, max 64).
-            save: Also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return its path.
+            save: Local/stdio: also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return
+                its path. Ignored on the hosted gateway (the image is returned inline).
         """
         stem = _safe_stem("erp", dataset or path or source, subject)
         payload = client.post(
@@ -205,7 +213,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 efficiency track: LOSO at the protocol's fixed per-subject
                 trial budget — the figure also includes the classical LOSO
                 baseline as a muted side panel for comparison).
-            save: Also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return its path.
+            save: Local/stdio: also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return
+                its path. Ignored on the hosted gateway (the image is returned inline).
         """
         ds_id = safe_segment(dataset_id, label="dataset id")
         if track not in _TRACKS:

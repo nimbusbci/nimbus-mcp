@@ -123,7 +123,8 @@ def _unreachable_message(lead: str) -> str:
         f"{lead} Pick one: (1) install and open the Nimbus Studio desktop app — "
         "it runs the backend locally and nimbus-mcp finds it automatically, no "
         f"login needed. macOS: {DESKTOP_DOWNLOAD_MACOS} · Windows: "
-        f"{DESKTOP_DOWNLOAD_WINDOWS} (2) or use hosted Nimbus with no install: "
+        f"{DESKTOP_DOWNLOAD_WINDOWS} · Linux: no desktop build yet — use option (2) "
+        "or (3). (2) or use hosted Nimbus with no install: "
         f"point your MCP client at {HOSTED_GATEWAY_URL}, or run `nimbus-mcp "
         "login` here to use the hosted API from this server. (3) Developers: "
         "start the dev backend on :8080 and set NIMBUS_MCP_KEY to its "
@@ -143,9 +144,7 @@ def local_mode_guidance(status: int | None = 401, api_url: str | None = None) ->
     if status is None:
         where = f" (nothing answered at {api_url})" if api_url else ""
         guidance = setup_guidance(
-            message=_unreachable_message(
-                f"No Nimbus backend is running on this machine{where}."
-            ),
+            message=_unreachable_message(f"No Nimbus backend is running on this machine{where}."),
             reason=LOCAL_BACKEND_UNREACHABLE,
         )
         guidance["options"] = _unreachable_options()
@@ -203,7 +202,7 @@ def token_rejected_guidance(token: str, status: int) -> dict[str, Any]:
                 f"Your Nimbus API token was rejected (HTTP {status}) — run "
                 "`nimbus-mcp login` to mint a fresh one (or update NIMBUS_TOKEN "
                 "if you set it manually)."
-            )
+            ),
         )
     remaining = exp - time.time()
     if remaining >= 0:

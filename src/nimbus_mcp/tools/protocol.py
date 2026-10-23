@@ -96,9 +96,7 @@ def _template_protocol_graph(client: NimbusClient, template_id: str) -> dict[str
 
 def _stored_execution_graph(client: NimbusClient, execution_id: str) -> dict[str, Any]:
     """The stored train graph of a completed execution (GET .../pipeline)."""
-    payload = client.get(
-        f"/api/executions/{safe_segment(execution_id)}/pipeline"
-    ).get("pipeline")
+    payload = client.get(f"/api/executions/{safe_segment(execution_id)}/pipeline").get("pipeline")
     train = payload.get("train") if isinstance(payload, dict) else None
     if not isinstance(train, dict) or not train.get("nodes"):
         raise McpToolError(
@@ -359,8 +357,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "dashboardHint": (
                 "Open the deploy session over WS: auth → init_deployment(modelExecutionId="
                 f"{execution}, dataSource simulated"
-                + (f", reuses the connected simulated device on session {session_id}"
-                   if session_id else " — connect your data source first")
+                + (
+                    f", reuses the connected simulated device on session {session_id}"
+                    if session_id
+                    else " — connect your data source first"
+                )
                 + ") → start. The Studio app mounts the protocol feedback panel; "
                 "poll protocol.session_status; protocol.stop saves the recording and "
                 "advances the assignment."

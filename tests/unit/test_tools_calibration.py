@@ -170,8 +170,7 @@ def _p300_calibration_yaml_node_types() -> list[str]:
 
 def test_p300_calibration_mock_node_types_match_template():
     mock_types = [
-        node["type"]
-        for node in P300_CALIBRATION_TEMPLATE["template"]["calibrate"]["nodes"]
+        node["type"] for node in P300_CALIBRATION_TEMPLATE["template"]["calibrate"]["nodes"]
     ]
     assert mock_types == _p300_calibration_yaml_node_types()
     assert mock_types == ["hardware_device", "trial_protocol", "calibration_recorder"]
@@ -219,7 +218,7 @@ P300_TRAIN_TEMPLATE = {
             }
         },
         "calibrate": None,
-    }
+    },
 }
 
 COMPLETED_LIVE = {

@@ -133,36 +133,46 @@ class FakeBackend:
                 if existing is not None and existing[0] != owner:
                     return httpx.Response(
                         404,
-                        json={"code": "nimbus.experiment.not_found",
-                              "detail": "Experiment not found"},
+                        json={
+                            "code": "nimbus.experiment.not_found",
+                            "detail": "Experiment not found",
+                        },
                     )
                 self.experiments[exp_id] = (owner, body)
                 return httpx.Response(
                     200,
-                    json={"ok": True, "record": {
-                        "experimentId": exp_id,
-                        "status": body.get("status"),
-                        "executionIds": body.get("executionIds") or [],
-                        "payload": body.get("payload"),
-                    }},
+                    json={
+                        "ok": True,
+                        "record": {
+                            "experimentId": exp_id,
+                            "status": body.get("status"),
+                            "executionIds": body.get("executionIds") or [],
+                            "payload": body.get("payload"),
+                        },
+                    },
                 )
             if req.method == "GET":
                 found = self.experiments.get(exp_id)
                 if found is None or found[0] != owner:
                     return httpx.Response(
                         404,
-                        json={"code": "nimbus.experiment.not_found",
-                              "detail": "Experiment not found"},
+                        json={
+                            "code": "nimbus.experiment.not_found",
+                            "detail": "Experiment not found",
+                        },
                     )
                 body = found[1]
                 return httpx.Response(
                     200,
-                    json={"ok": True, "record": {
-                        "experimentId": exp_id,
-                        "status": body.get("status"),
-                        "executionIds": body.get("executionIds") or [],
-                        "payload": body.get("payload"),
-                    }},
+                    json={
+                        "ok": True,
+                        "record": {
+                            "experimentId": exp_id,
+                            "status": body.get("status"),
+                            "executionIds": body.get("executionIds") or [],
+                            "payload": body.get("payload"),
+                        },
+                    },
                 )
         if path.startswith("/api/result/"):
             exec_id = path.split("/")[3]
@@ -316,14 +326,10 @@ def test_compute_aggregates_kind_breakdown_mixed_per_subject_and_loso():
     assert aggregates["pooledExecutionIds"] == ["e1", "e2", "e3", "531b846b"]
     # Pooled headline mean unchanged (still all completed runs, incl. LOSO).
     assert aggregates["accuracyPct"]["n"] == 4
-    assert aggregates["accuracyPct"]["mean"] == pytest.approx(
-        (69.58 + 59.56 + 55.56 + 58.44) / 4.0
-    )
+    assert aggregates["accuracyPct"]["mean"] == pytest.approx((69.58 + 59.56 + 55.56 + 58.44) / 4.0)
     breakdown = {row["kind"]: row for row in aggregates["kindBreakdown"]}
     assert breakdown["per_subject"]["n"] == 3
-    assert breakdown["per_subject"]["mean"] == pytest.approx(
-        (69.58 + 59.56 + 55.56) / 3.0
-    )
+    assert breakdown["per_subject"]["mean"] == pytest.approx((69.58 + 59.56 + 55.56) / 3.0)
     assert breakdown["per_subject"]["executionIds"] == ["e1", "e2", "e3"]
     assert breakdown["loso"]["n"] == 1
     assert breakdown["loso"]["mean"] == pytest.approx(58.44)
@@ -448,9 +454,7 @@ def test_ensure_kind_breakdown_acb2c103_nGroups_on_per_subject_not_all_loso():
     breakdown = {row["kind"]: row for row in fixed["aggregates"]["kindBreakdown"]}
     assert set(breakdown) == {"per_subject", "loso"}
     assert breakdown["per_subject"]["n"] == 3
-    assert breakdown["per_subject"]["mean"] == pytest.approx(
-        (69.58 + 59.56 + 55.56) / 3.0
-    )
+    assert breakdown["per_subject"]["mean"] == pytest.approx((69.58 + 59.56 + 55.56) / 3.0)
     assert breakdown["loso"]["n"] == 1
     assert breakdown["loso"]["mean"] == pytest.approx(58.44)
     # Prior all-loso bucket replaced; input not mutated.
@@ -565,9 +569,7 @@ def test_ensure_kind_breakdown_enriches_from_result_api():
     fixed = campaign._ensure_kind_breakdown(payload, client=_ResultClient())
     breakdown = {row["kind"]: row for row in fixed["aggregates"]["kindBreakdown"]}
     assert breakdown["per_subject"]["n"] == 3
-    assert breakdown["per_subject"]["mean"] == pytest.approx(
-        (69.58 + 59.56 + 55.56) / 3.0
-    )
+    assert breakdown["per_subject"]["mean"] == pytest.approx((69.58 + 59.56 + 55.56) / 3.0)
     assert breakdown["loso"]["n"] == 1
     assert breakdown["loso"]["mean"] == pytest.approx(58.44)
     kinds = {r["executionId"]: r["evaluationKind"] for r in fixed["runs"]}
@@ -1078,7 +1080,9 @@ async def test_rejected_token_at_start_returns_relogin_not_running():
     campaign.register(server, expired_token_client(handler))
     async with Client(server) as c:
         result = await c.call_tool(
-            "experiment.run", {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]}
+            "experiment.run",
+            {"runs": [{"name": "r1", "train_graph": TRAIN_GRAPH}]},
+            raise_on_error=False,
         )
     data = result.data if isinstance(result.data, dict) else result.structured_content
     assert data["setupRequired"] is True

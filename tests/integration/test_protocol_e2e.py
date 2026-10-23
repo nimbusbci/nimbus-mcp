@@ -332,9 +332,7 @@ async def test_protocol_builder_acceptance(pro_bearer, tmp_path: Path):
         )
         assert active.data["started"] is True
         assert active.data["sessionId"] and active.data["executionId"]
-        donor_run = await _run_simulated_session(
-            c, pro_bearer, active.data, spec, stop_via="ws"
-        )
+        donor_run = await _run_simulated_session(c, pro_bearer, active.data, spec, stop_via="ws")
         assert donor_run["ok"] and donor_run["filename"], donor_run
 
         async with httpx.AsyncClient(

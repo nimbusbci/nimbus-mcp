@@ -70,9 +70,7 @@ def _client(tmp_path: Path) -> NimbusClient:
         assert request.url.path == "/api/templates"
         return httpx.Response(200, json={"templates": [{"id": "t1"}]})
 
-    cfg = McpConfig(
-        api_url="http://test", mcp_key="k", export_dir=tmp_path, credential_meta={}
-    )
+    cfg = McpConfig(api_url="http://test", mcp_key="k", export_dir=tmp_path, credential_meta={})
     return NimbusClient(cfg, transport=httpx.MockTransport(handler))
 
 
@@ -151,9 +149,7 @@ async def test_tool_completed_payload_is_allowlisted(tmp_path):
     assert props["duration_bucket"] in ("<1s", "1-5s", "5-30s", "30s+")
     for key in props:
         tokens = set(key.lower().lstrip("$").split("_"))
-        assert not (tokens & set(FORBIDDEN_KEY_PARTS)), (
-            f"forbidden property key: {key}"
-        )
+        assert not (tokens & set(FORBIDDEN_KEY_PARTS)), f"forbidden property key: {key}"
 
 
 def test_cli_consent_delivers_first_run_before_returning(tmp_path):
@@ -237,9 +233,7 @@ def test_no_key_configured_means_no_capture_even_when_consented(tmp_path, monkey
 
     monkeypatch.setattr(product_telemetry, "DEFAULT_POSTHOG_KEY", "")
     recorder = Recorder()
-    telemetry = Telemetry(
-        state_path=tmp_path / "s.json", sender=recorder, environ={}
-    )
+    telemetry = Telemetry(state_path=tmp_path / "s.json", sender=recorder, environ={})
     telemetry.set_consent(True)
     time.sleep(0.2)
     assert recorder.payloads == []
@@ -263,9 +257,7 @@ def _reset_version_check():
 
 
 def _run_check(tmp_path, fetcher):
-    version_check.start_background_check(
-        fetcher=fetcher, cache_path=tmp_path / "vc.json"
-    )
+    version_check.start_background_check(fetcher=fetcher, cache_path=tmp_path / "vc.json")
     deadline = time.time() + 3
     while time.time() < deadline:
         # Peek without consuming: pending_notice() is once-per-process.

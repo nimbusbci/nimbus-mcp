@@ -19,7 +19,7 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 
 | Capability | nimbus-mcp | bci-mcp | eeg-mcp | mne-mcp | ephys-mcp |
 |---|---|---|---|---|---|
-| Build + validate + run BCI pipelines | ✅ 60 tools | — | — | — | — |
+| Build + validate + run BCI pipelines | ✅ 63 tools | — | — | — | — |
 | Train on real data (MOABB packs, uploads) | ✅ | — | — | file I/O only | NWB/DANDI |
 | Bring-your-own model code (`python_model`) | ✅ local + cloud sandbox | — | — | — | — |
 | Benchmark leaderboard + server-side LOSO scoring | ✅ | — | — | — | — |
@@ -283,7 +283,7 @@ returns onboarding guidance).
 
 ## Hosted gateway (streamable HTTP)
 
-`nimbus-mcp serve` runs the same 60 tools over streamable HTTP instead of
+`nimbus-mcp serve` runs the same 63 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
 servers), and browser-side clients:
 
@@ -373,15 +373,17 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
 }
 ```
 
-## Tools (60)
+## Tools (63)
 
 Auth: `account.whoami` (account, plan, quota, token expiry)
 Discovery: `catalog.nodes`, `catalog.node_schema`, `catalog.templates`, `catalog.template`, `catalog.datasets`, `catalog.leaderboard`
 Data: `data.upload`, `data.delete_upload` (needs `confirm=true`)
 Inspect: `data.inspect_dataset`, `data.inspect_file` (EDA: channels, class balance, band powers, PSD)
 Build: `pipeline.validate`, `pipeline.validate_node`
-Run: `execution.run` (non-blocking), `execution.get`, `execution.list`, `execution.results`, `execution.cancel`
-Campaigns: `experiment.run` (non-blocking, 1-25 paced runs), `experiment.get`
+Run: `execution.run` (non-blocking), `execution.get`, `execution.list`, `execution.results`, `execution.cancel`, `execution.delete` (needs `confirm=true`)
+
+Run summaries (`execution.get` / `execution.list`) carry two dataset fields: `dataset` is the human-readable display label (e.g. `BCIIV2a`), and `datasetId` is the catalog id (e.g. `BNCI2014_001`) that other tools accept (`data.inspect_dataset`, `public_data.dataset` in a graph). `title` is the run name shown in Studio.
+Campaigns: `experiment.run` (non-blocking, 1-25 paced runs), `experiment.get`, `experiment.delete` (needs `confirm=true`)
 Artifacts: `execution.artifacts`, `execution.download_artifact`, `pipeline.export`
 Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
 `stream.status`, `stream.telemetry`, `stream.stop`
@@ -391,7 +393,7 @@ Neurofeedback protocols: `protocol.validate`/`protocol.save` (versioned specs),
 `protocol.start_assignment` (confirm-gated; simulated sources free, live hardware Pro),
 `protocol.session_status`/`pause`/`resume`/`stop`, `protocol.export_stats`
 (paired pre/post stats + figure + CSV)
-Projects: `project.create`, `project.list`, `project.save`, `project.load`, `project.delete` (needs `confirm=true`)
+Projects: `project.create`, `project.list`, `project.save`, `project.load`, `project.rename`, `project.delete` (needs `confirm=true`)
 Python: `python.validate` (static contract check for BYO model code — no execution)
 Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring,
 202 + `submissionId`; `track="pretrained_few_trial"` = efficiency track:
@@ -443,7 +445,7 @@ uploaded file on ANY backend (hosted or local):
 
 ```python
 data.inspect_file(path="/Users/you/recordings/session-01.edf")  # absolute → local file
-data.inspect_file(path="uploads/<user>/session-01.edf")         # data.upload path → upload
+data.inspect_file(path="uploads/<user>/session-01.edf")  # data.upload path → upload
 data.inspect_file(path="uploads/<user>/eeg.csv", sampling_rate=250.0)  # CSV/TSV/TXT need a rate
 ```
 
@@ -471,7 +473,7 @@ butterfly — check class structure before training anything),
 highlighted). `save=true` also writes the PNG into `NIMBUS_EXPORT_DIR/plots/`.
 
 ```python
-plots.confusion(execution_id="exec_123")               # → image + per-class accuracy
+plots.confusion(execution_id="exec_123")  # → image + per-class accuracy
 plots.dataset(kind="psd", source="dataset", dataset="BNCI2014_001", subject="S01")
 stats.grouped(execution_ids=["exec_123", "exec_124"])  # cluster-aware t-interval + p
 ```
@@ -560,7 +562,7 @@ calibration.status(execution_id="…")
 #    cue: "← LEFT"}, progress: {trialsDone: 6, …}, estimatedRemainingSec: 105.0, …}
 
 # 3./4. Pacing between trials (cues hold; resume anytime).
-calibration.pause(execution_id="…")   # calibration.resume(...) to continue
+calibration.pause(execution_id="…")  # calibration.resume(...) to continue
 
 # 5. When phase == "complete" the snapshot carries the recording:
 #    calibration: {uploadId, path, filename, format}. Train from it.

@@ -25,8 +25,11 @@ def _down(req: httpx.Request) -> httpx.Response:
 
 def _client(*, key: str = "", token: str = "", meta: dict | None = None, handler=_down):
     cfg = McpConfig(
-        api_url=URL, mcp_key=key, nimbus_token=token or None,  # type: ignore[arg-type]
-        export_dir=None, credential_meta=meta or {},
+        api_url=URL,
+        mcp_key=key,
+        nimbus_token=token or None,  # type: ignore[arg-type]
+        export_dir=None,
+        credential_meta=meta or {},
     )
     return NimbusClient(cfg, transport=httpx.MockTransport(handler))
 
@@ -34,8 +37,13 @@ def _client(*, key: str = "", token: str = "", meta: dict | None = None, handler
 def _assert_unreachable_payload(g: dict) -> None:
     assert g["ok"] is False and g["setupRequired"] is True
     assert g["reason"] == LOCAL_BACKEND_UNREACHABLE
-    for needle in (DESKTOP_DOWNLOAD_MACOS, DESKTOP_DOWNLOAD_WINDOWS, HOSTED_GATEWAY_URL,
-                   "nimbus-mcp login", "NIMBUS_MCP_KEY"):
+    for needle in (
+        DESKTOP_DOWNLOAD_MACOS,
+        DESKTOP_DOWNLOAD_WINDOWS,
+        HOSTED_GATEWAY_URL,
+        "nimbus-mcp login",
+        "NIMBUS_MCP_KEY",
+    ):
         assert needle in g["message"], needle
     actions = [o["action"] for o in g["options"]]
     assert actions == [

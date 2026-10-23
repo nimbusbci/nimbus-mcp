@@ -73,9 +73,7 @@ def load_config(env: Mapping[str, str] | None = None) -> McpConfig:
     return McpConfig(
         api_url=(cred.api_url or DEFAULT_API_URL).rstrip("/"),
         mcp_key=mcp_key,
-        export_dir=Path(
-            env.get("NIMBUS_EXPORT_DIR") or str(default_export_dir())
-        ).expanduser(),
+        export_dir=Path(env.get("NIMBUS_EXPORT_DIR") or str(default_export_dir())).expanduser(),
         nimbus_token=nimbus_token,
         credential_meta=dict(cred.meta),
     )

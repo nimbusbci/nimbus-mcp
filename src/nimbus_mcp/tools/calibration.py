@@ -100,8 +100,7 @@ def _exec_connections(raw: Any, template_id: str) -> list[dict[str, str]]:
     for conn in raw or []:
         if not isinstance(conn, dict) or "from" not in conn or "to" not in conn:
             raise McpToolError(
-                f"Template '{template_id}' has a connection without from/to "
-                f"endpoints: {conn!r}"
+                f"Template '{template_id}' has a connection without from/to endpoints: {conn!r}"
             )
         out.append({"from": conn["from"], "to": conn["to"]})
     return out

@@ -40,6 +40,13 @@ def _token_info(client: NimbusClient) -> dict[str, Any] | None:
     return info or None
 
 
+def _real_email(value: object) -> str | None:
+    """Drop the backend's ``<user_id>@clerk.local`` placeholder (E2E 2026-10-21)."""
+    if not isinstance(value, str) or not value or value.endswith("@clerk.local"):
+        return None
+    return value
+
+
 def register(mcp: FastMCP, client: NimbusClient) -> None:
     @mcp.tool(name="account.whoami", annotations=READ_ONLY)
     def whoami() -> dict[str, Any]:
@@ -93,7 +100,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 token_info["daysLeft"] = max(0, math.ceil((exp - time.time()) / 86400))
         return {
             "userId": profile.get("userId"),
-            "email": profile.get("email"),
+            "email": _real_email(profile.get("email")),
             "plan": {
                 "isPro": bool(caps.get("isPro")),
                 "pioneerAccess": bool(caps.get("hasPioneerAccess")),

@@ -48,9 +48,7 @@ async def test_validate_posts_code_and_class_name():
         )
 
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool(
-            "python.validate", {"code": GOOD_CODE, "class_name": "MyModel"}
-        )
+        result = await c.call_tool("python.validate", {"code": GOOD_CODE, "class_name": "MyModel"})
     assert seen["path"] == "/api/python-model/validate"
     assert seen["body"] == {"code": GOOD_CODE, "className": "MyModel"}
     assert result.data["ok"] is True

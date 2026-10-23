@@ -226,10 +226,16 @@ class Telemetry:
         """'granted' | 'denied' | 'unknown' (env override wins)."""
         if self._disabled:
             return _CONSENT_DENIED
-        env = _env_override() if self._environ is os.environ else (
-            "on" if self._environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower() == "on"
-            else "off" if self._environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower() == "off"
-            else None
+        env = (
+            _env_override()
+            if self._environ is os.environ
+            else (
+                "on"
+                if self._environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower() == "on"
+                else "off"
+                if self._environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower() == "off"
+                else None
+            )
         )
         if env == "off":
             return _CONSENT_DENIED
@@ -336,18 +342,13 @@ class Telemetry:
                     self._first_run_inflight = True
                     self._first_run_attempted = True
                 if event == "first_local_result":
-                    if (
-                        state.get("first_local_result_sent")
-                        or self._first_local_result_attempted
-                    ):
+                    if state.get("first_local_result_sent") or self._first_local_result_attempted:
                         return
                     # Marked sent only on a 2xx (see _first_local_result_done);
                     # one attempt per process, retried by the next one.
                     self._first_local_result_attempted = True
             if need_first_run:
-                self._dispatch(
-                    "first_run", {}, sync=sync, on_done=self._first_run_done
-                )
+                self._dispatch("first_run", {}, sync=sync, on_done=self._first_run_done)
             if event == "first_local_result":
                 self._dispatch(
                     event, properties or {}, sync=sync, on_done=self._first_local_result_done
@@ -395,9 +396,7 @@ class Telemetry:
         if sync:
             self._safe_send(payload, on_done)
             return
-        thread = threading.Thread(
-            target=self._safe_send, args=(payload, on_done), daemon=True
-        )
+        thread = threading.Thread(target=self._safe_send, args=(payload, on_done), daemon=True)
         thread.start()
 
     def _safe_send(

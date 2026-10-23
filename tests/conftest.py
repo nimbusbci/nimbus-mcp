@@ -17,6 +17,7 @@ def _isolate_nimbus_state(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("NIMBUS_MCP_VERSION_CHECK_FILE", str(state_dir / "version-check.json"))
     monkeypatch.delenv("NIMBUS_MCP_TELEMETRY", raising=False)
     monkeypatch.delenv("NIMBUS_MCP_VERSION_CHECK", raising=False)
+
     # The real public key now ships: no test may ever reach PostHog or
     # PyPI. Default transports are replaced with hard failures (tests that
     # exercise capture inject their own recording sender/fetcher).

@@ -172,9 +172,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--name", default=None, metavar="NAME", help="display name for the minted token"
     )
     sub.add_parser("logout", help="remove the stored credential")
-    telemetry = sub.add_parser(
-        "telemetry", help="show or change anonymous usage-telemetry consent"
-    )
+    telemetry = sub.add_parser("telemetry", help="show or change anonymous usage-telemetry consent")
     telemetry.add_argument(
         "action",
         nargs="?",
@@ -407,9 +405,7 @@ def _probe_profile(cred: ResolvedCredential, transport: httpx.BaseTransport | No
     access = token_access_summary(claims)
     if access:
         scopes = (
-            "full access"
-            if access["fullAccess"]
-            else " ".join(access["scopes"] or []) or "none"
+            "full access" if access["fullAccess"] else " ".join(access["scopes"] or []) or "none"
         )
         print(f"token kind: {access['kind']} · scopes: {scopes}")
     try:

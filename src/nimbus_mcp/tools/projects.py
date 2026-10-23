@@ -114,6 +114,19 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "train": payload.get("train"),
         }
 
+    @mcp.tool(name="project.rename", annotations=MUTATING)
+    def rename_project(project_id: str, name: str) -> dict[str, Any]:
+        """Rename a project you own (max 200 characters).
+
+        Args:
+            project_id: Project to rename (from project.create/project.list).
+            name: New display name.
+        """
+        pid = safe_segment(project_id, label="project id")
+        payload = client.patch(f"/api/projects/{pid}", json={"name": name})
+        project = payload.get("project") or {}
+        return {"projectId": project.get("id", pid), "name": project.get("name", name)}
+
     @mcp.tool(name="project.delete", annotations=DESTRUCTIVE)
     def delete_project(project_id: str, confirm: bool = False) -> dict[str, Any]:
         """Delete a project (and its saved pipeline document) from the studio workspace.

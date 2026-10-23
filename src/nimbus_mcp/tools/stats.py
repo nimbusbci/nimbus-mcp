@@ -36,7 +36,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         with a t-interval and a one-sample t-test vs chance. Responses label
         ``groupKind``, real ``groupKeys`` (subject ids like S01 when stamped
         or recoverable), ``perGroup`` (key + accuracy pairs),
-        ``overall.pooledExecutionIds``, and ``kindBreakdown`` / 
+        ``overall.pooledExecutionIds``, and ``kindBreakdown`` /
         ``overall.kindBreakdown`` (per_subject vs loso etc. with n + mean —
         #470; between-group pooled mean is unchanged).
 

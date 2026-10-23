@@ -242,8 +242,12 @@ async def test_start_assignment_refuses_without_confirm():
     ) as c:
         result = await c.call_tool(
             "protocol.start_assignment",
-            {"protocol_id": "focus-nf-v1", "protocol_version": 1, "subject_label": "S01",
-             "arm": "sham"},
+            {
+                "protocol_id": "focus-nf-v1",
+                "protocol_version": 1,
+                "subject_label": "S01",
+                "arm": "sham",
+            },
         )
     assert result.data["started"] is False and "confirm" in result.data["message"]
     assert calls == []  # rail: zero HTTP calls without confirm
@@ -254,14 +258,17 @@ async def test_start_assignment_rejects_unknown_arm():
         with pytest.raises(Exception, match="arm"):
             await c.call_tool(
                 "protocol.start_assignment",
-                {"protocol_id": "focus-nf-v1", "protocol_version": 1,
-                 "subject_label": "S01", "arm": "placebo", "confirm": True},
+                {
+                    "protocol_id": "focus-nf-v1",
+                    "protocol_version": 1,
+                    "subject_label": "S01",
+                    "arm": "placebo",
+                    "confirm": True,
+                },
             )
 
 
-def _assignment_backend(
-    seen: dict[str, list[httpx.Request]], donor: str | None = None
-):
+def _assignment_backend(seen: dict[str, list[httpx.Request]], donor: str | None = None):
     """Template-path handler: assignment → template → mint → simulated connect."""
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -275,13 +282,19 @@ def _assignment_backend(
         if req.url.path.startswith("/api/projects/") and req.url.path.endswith(
             "/prepare-zero-cal-deploy"
         ):
-            return httpx.Response(200, json={"ok": True, "executionId": "exec_mint",
-                                             "projectId": "p"})
+            return httpx.Response(
+                200, json={"ok": True, "executionId": "exec_mint", "projectId": "p"}
+            )
         if req.url.path == "/api/hardware/connect":
             return httpx.Response(
                 200,
-                json={"ok": True, "sessionId": "sess_9", "deviceType": "simulated",
-                      "channels": 4, "samplingRate": 250.0},
+                json={
+                    "ok": True,
+                    "sessionId": "sess_9",
+                    "deviceType": "simulated",
+                    "channels": 4,
+                    "samplingRate": 250.0,
+                },
             )
         raise AssertionError(req.url.path)
 
@@ -353,8 +366,13 @@ async def test_start_assignment_omits_donor_key_when_absent():
     async with Client(make_server(_assignment_backend(seen))) as c:
         await c.call_tool(
             "protocol.start_assignment",
-            {"protocol_id": "focus-nf-v1", "protocol_version": 1,
-             "subject_label": "S02", "arm": "active", "confirm": True},
+            {
+                "protocol_id": "focus-nf-v1",
+                "protocol_version": 1,
+                "subject_label": "S02",
+                "arm": "active",
+                "confirm": True,
+            },
         )
     body = json.loads(seen["/api/protocol-assignments"][0].read())
     assert "yokedDonorUploadId" not in body
@@ -369,21 +387,28 @@ async def test_start_assignment_from_execution_graph():
     def handler(req: httpx.Request) -> httpx.Response:
         seen.setdefault(req.url.path, []).append(req)
         if req.url.path == "/api/protocol-assignments":
-            return httpx.Response(201, json={"ok": True, "assignmentId": "asg_2",
-                                             "sessionIndex": 0})
+            return httpx.Response(
+                201, json={"ok": True, "assignmentId": "asg_2", "sessionIndex": 0}
+            )
         if req.url.path == "/api/executions/exec_src/pipeline":
             return httpx.Response(200, json=PIPELINE)
         if req.url.path.startswith("/api/projects/"):
-            return httpx.Response(200, json={"ok": True, "executionId": "exec_mint2",
-                                             "projectId": "p"})
+            return httpx.Response(
+                200, json={"ok": True, "executionId": "exec_mint2", "projectId": "p"}
+            )
         raise AssertionError(req.url.path)
 
     async with Client(make_server(handler)) as c:
         result = await c.call_tool(
             "protocol.start_assignment",
-            {"protocol_id": "focus-nf-v1", "protocol_version": 3,
-             "subject_label": "S03", "arm": "active", "execution_id": "exec_src",
-             "confirm": True},
+            {
+                "protocol_id": "focus-nf-v1",
+                "protocol_version": 3,
+                "subject_label": "S03",
+                "arm": "active",
+                "execution_id": "exec_src",
+                "confirm": True,
+            },
         )
     assert result.data["started"] is True
     assert result.data["executionId"] == "exec_mint2"
@@ -405,14 +430,13 @@ async def test_start_assignment_from_execution_graph():
 async def test_start_assignment_execution_graph_requires_protocol_node():
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/api/protocol-assignments":
-            return httpx.Response(201, json={"ok": True, "assignmentId": "asg_3",
-                                             "sessionIndex": 0})
+            return httpx.Response(
+                201, json={"ok": True, "assignmentId": "asg_3", "sessionIndex": 0}
+            )
         if req.url.path == "/api/executions/exec_src/pipeline":
             no_node = json.loads(json.dumps(PIPELINE))
             no_node["pipeline"]["train"]["nodes"] = no_node["pipeline"]["train"]["nodes"][:2]
-            no_node["pipeline"]["train"]["connections"] = [
-                {"from": "src", "to": "ind"}
-            ]
+            no_node["pipeline"]["train"]["connections"] = [{"from": "src", "to": "ind"}]
             return httpx.Response(200, json=no_node)
         raise AssertionError(req.url.path)
 
@@ -420,9 +444,14 @@ async def test_start_assignment_execution_graph_requires_protocol_node():
         with pytest.raises(Exception, match="protocol_session"):
             await c.call_tool(
                 "protocol.start_assignment",
-                {"protocol_id": "focus-nf-v1", "protocol_version": 1,
-                 "subject_label": "S04", "arm": "active", "execution_id": "exec_src",
-                 "confirm": True},
+                {
+                    "protocol_id": "focus-nf-v1",
+                    "protocol_version": 1,
+                    "subject_label": "S04",
+                    "arm": "active",
+                    "execution_id": "exec_src",
+                    "confirm": True,
+                },
             )
 
 
@@ -435,8 +464,12 @@ async def test_session_status_reads_session_live():
         assert dict(req.url.params) == {"sessionId": "sess_9", "window": "50"}
         return httpx.Response(
             200,
-            json={"ok": True, "sessionId": "sess_9", "chunksProcessed": 12,
-                  "protocol": {"sessionIndex": 0, "blockIndex": 1, "kind": "training"}},
+            json={
+                "ok": True,
+                "sessionId": "sess_9",
+                "chunksProcessed": 12,
+                "protocol": {"sessionIndex": 0, "blockIndex": 1, "kind": "training"},
+            },
         )
 
     async with Client(make_server(handler)) as c:
@@ -452,14 +485,11 @@ async def test_pause_resume_stop_call_lifecycle_routes():
     def handler(req: httpx.Request) -> httpx.Response:
         seen[req.url.path] = req
         if req.url.path == "/api/hardware/pause-stream":
-            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9",
-                                             "paused": True})
+            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9", "paused": True})
         if req.url.path == "/api/hardware/start-stream":
-            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9",
-                                             "started": True})
+            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9", "started": True})
         if req.url.path == "/api/hardware/stop-stream":
-            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9",
-                                             "stopped": True})
+            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9", "stopped": True})
         if req.url.path == "/api/hardware/disconnect":
             return httpx.Response(200, json={"ok": True, "sessionId": "sess_9"})
         raise AssertionError(req.url.path)
@@ -484,8 +514,7 @@ async def test_stop_survives_disconnect_failure():
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/api/hardware/stop-stream":
-            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9",
-                                             "stopped": True})
+            return httpx.Response(200, json={"ok": True, "sessionId": "sess_9", "stopped": True})
         if req.url.path == "/api/hardware/disconnect":
             return httpx.Response(500, json={"detail": "boom"})
         raise AssertionError(req.url.path)

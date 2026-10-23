@@ -160,9 +160,7 @@ async def test_delete_upload_sends_delete_with_confirm():
         )
 
     async with Client(make_server(handler)) as c:
-        r = await c.call_tool(
-            "data.delete_upload", {"path": "user_x/rec.csv", "confirm": True}
-        )
+        r = await c.call_tool("data.delete_upload", {"path": "user_x/rec.csv", "confirm": True})
     assert seen == {
         "method": "DELETE",
         "path": "/api/uploads",
@@ -177,6 +175,4 @@ async def test_delete_upload_rejects_traversal_path():
 
     async with Client(make_server(handler)) as c:
         with pytest.raises(Exception, match="upload path"):
-            await c.call_tool(
-                "data.delete_upload", {"path": "../evil.csv", "confirm": True}
-            )
+            await c.call_tool("data.delete_upload", {"path": "../evil.csv", "confirm": True})

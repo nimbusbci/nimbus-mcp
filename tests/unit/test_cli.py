@@ -550,6 +550,7 @@ def test_logout_permission_error_is_reported_not_raised(capsys, monkeypatch):
 # bind would expose an unauthenticated MCP surface. --host and NIMBUS_MCP_HOST
 # remain the explicit opt-in path (the Fly deployment sets the env).
 
+
 def test_serve_defaults_to_loopback_host(monkeypatch):
     import nimbus_mcp.server as server_mod
 

@@ -31,11 +31,14 @@ class McpToolError(Exception):
         status_code: int | None = None,
         code: str | None = None,
         correlation_id: str | None = None,
+        retry_after: int | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.correlation_id = correlation_id
+        #: Seconds to wait before retrying (from ``Retry-After`` / ``retryAfter``).
+        self.retry_after = retry_after
 
 
 def local_tool_error(

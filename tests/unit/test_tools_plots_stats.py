@@ -77,6 +77,20 @@ async def test_confusion_saves_png(tmp_path):
     assert info["savedPath"] == str(saved)
 
 
+async def test_confusion_hosted_save_writes_nothing(tmp_path, monkeypatch):
+    """Hosted gateway: save=True must not write to the gateway disk (review fix)."""
+    monkeypatch.setattr(plots, "is_hosted_gateway", lambda _c: True)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_plot_payload())
+
+    async with Client(make_server(handler, tmp_path)) as c:
+        result = await c.call_tool("plots.confusion", {"execution_id": "exec_9", "save": True})
+    _, info = _image_and_info(result)
+    assert "savedPath" not in info
+    assert not (tmp_path / "plots").exists()
+
+
 async def test_confusion_rejects_bad_matrix(tmp_path):
     async with Client(make_server(lambda req: httpx.Response(500), tmp_path)) as c:
         with pytest.raises(ToolError, match="eval.*train"):

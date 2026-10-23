@@ -101,6 +101,51 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
 Note: expect filter/ASR warm-up periods and confidence to start low; signal quality matters."""
 
 
+class ArgumentGuardMiddleware(Middleware):
+    """Resolve common parameter aliases and turn schema mismatches into one
+    readable line (E2E 2026-10-21: raw pydantic dumps for ``dataset_id`` /
+    ``graph``)."""
+
+    def __init__(self, mcp: FastMCP) -> None:
+        self._mcp = mcp
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next: CallNext) -> ToolResult:
+        from .tools._args import argument_problem, friendly_validation_message, normalize_arguments
+
+        message = context.message
+        name = str(getattr(message, "name", "") or "")
+        try:
+            tool = await self._mcp.get_tool(name)
+        except Exception:  # unknown tool: let fastmcp answer as usual
+            return await call_next(context)
+        schema = getattr(tool, "parameters", None) or {}
+        args = dict(getattr(message, "arguments", None) or {})
+        fixed, _renamed = normalize_arguments(args, schema)
+        problem = argument_problem(name, fixed, schema)
+        if problem is not None:
+            raise ToolError(_invalid_argument(problem))
+        if fixed != args:
+            message.arguments = fixed
+        try:
+            return await call_next(context)
+        except Exception as err:
+            # Wrong-TYPE arguments (limit="abc", execution_id=12, train_graph="x")
+            # surface as a bare pydantic ValidationError, not a ToolError (E2E r3),
+            # so match on the message text whatever the exception class is.
+            friendly = friendly_validation_message(name, str(err), schema)
+            if friendly is None:
+                raise
+            raise ToolError(_invalid_argument(friendly)) from None
+
+
+def _invalid_argument(message: str) -> str:
+    """Tag an argument error with ``nimbus.mcp.invalid_argument`` + correlationId."""
+    from .errors import local_tool_error
+    from .tools._guards import INVALID_ARGUMENT
+
+    return str(local_tool_error(message, code=INVALID_ARGUMENT))
+
+
 class SetupGuidanceMiddleware(Middleware):
     """Converts :class:`SetupRequired` into the structured guidance dict.
 
@@ -119,12 +164,27 @@ class SetupGuidanceMiddleware(Middleware):
         try:
             return await call_next(context)
         except SetupRequired as err:  # direct, in case fastmcp ever stops wrapping
-            return ToolResult(structured_content=err.guidance)
+            return _guidance_result(err.guidance)
         except ToolError as err:
             cause = err.__cause__ or err.__context__
             if isinstance(cause, SetupRequired):
-                return ToolResult(structured_content=cause.guidance)
+                return _guidance_result(cause.guidance)
             raise
+
+
+def _guidance_result(guidance: dict[str, Any]) -> ToolResult:
+    """Setup guidance means the tool did NOT run: flag it ``isError`` (E2E
+    2026-10-21) while keeping the structured payload and a readable text block."""
+    import json
+
+    from mcp.types import TextContent
+
+    text = str(guidance.get("message") or "Setup required.")
+    return ToolResult(
+        content=[TextContent(type="text", text=text + "\n" + json.dumps(guidance))],
+        structured_content=guidance,
+        is_error=True,
+    )
 
 
 # fastmcp loggers that print "Error calling tool …" with a full (rich)
@@ -309,6 +369,7 @@ def build_server(
     mcp = FastMCP("nimbus", version=__version__, instructions=INSTRUCTIONS, auth=auth)
     install_expected_condition_log_filter()
     mcp.add_middleware(SetupGuidanceMiddleware())
+    mcp.add_middleware(ArgumentGuardMiddleware(mcp))
     if product_telemetry is None:
         # The hosted gateway has no install identity and must not attach
         # per-install consent notices to other people's sessions.
@@ -340,6 +401,9 @@ def build_server(
         foundation,
     ):
         module.register(mcp, client)
+    from . import prompts
+
+    prompts.register(mcp)
     return mcp
 
 
@@ -379,6 +443,14 @@ def serve(host: str = DEFAULT_SERVE_HOST, port: int = 8080, path: str = "/mcp") 
             "NIMBUS_MCP_OAUTH=1: the startup NIMBUS_TOKEN fallback is ignored "
             "(headerless requests must sign in)"
         )
+    from starlette.middleware import Middleware as AsgiMiddleware
+
+    from .hosted import StripUnboundSessionIdMiddleware
+
     build_server(client, product_telemetry=Telemetry.disabled(), auth=auth).run(
-        transport="http", host=host, port=port, path=path
+        transport="http",
+        host=host,
+        port=port,
+        path=path,
+        middleware=[AsgiMiddleware(StripUnboundSessionIdMiddleware)],
     )

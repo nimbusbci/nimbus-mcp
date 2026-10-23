@@ -21,6 +21,7 @@ from nimbus_mcp.hosted import HeaderCredentialClient
 from nimbus_mcp.oauth import (
     AUTHORIZE_REQUEST_AUDIENCE,
     GATEWAY_SECRET_HEADER,
+    NIMBUS_SCOPES,
     NimbusOAuthProvider,
     oauth_enabled,
     provider_from_env,
@@ -116,6 +117,9 @@ def test_flag_on_metadata_and_challenge():
     with TestClient(_app(_provider(FakeBackend())), base_url=GW) as c:
         prm = c.get("/.well-known/oauth-protected-resource/mcp")
         assert prm.status_code == 200
+        # Root form served too (E2E 2026-10-21: it was a 404).
+        root = c.get("/.well-known/oauth-protected-resource")
+        assert root.status_code == 200 and root.json() == prm.json()
         assert prm.json()["authorization_servers"] == [f"{GW}/"]
         asm = c.get("/.well-known/oauth-authorization-server").json()
         assert asm["registration_endpoint"] == f"{GW}/register"
@@ -294,3 +298,119 @@ def test_public_client_dcr_and_token_endpoint_without_secret():
     # (fastmcp maps an unknown code to 4xx invalid_grant; never invalid_client).
     assert 400 <= tok.status_code < 500, tok.text
     assert tok.json()["error"] == "invalid_grant"
+
+
+def test_dcr_without_scope_can_authorize_scope_read():
+    """Smithery-style DCR omits `scope`; /authorize?scope=read must not be invalid_scope."""
+    backend = FakeBackend()
+    with TestClient(_app(_provider(backend)), base_url=GW) as c:
+        reg = c.post(
+            "/register",
+            json={
+                "client_name": "Smithery",
+                "redirect_uris": ["https://smithery.test/cb"],
+                "grant_types": ["authorization_code"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            },
+        )
+        assert reg.status_code == 201, reg.text
+        assert set(reg.json()["scope"].split()) == set(NIMBUS_SCOPES)
+        r = c.get(
+            "/authorize",
+            params={
+                "response_type": "code",
+                "client_id": reg.json()["client_id"],
+                "redirect_uri": "https://smithery.test/cb",
+                "scope": "read",
+                "state": "s",
+                "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                "code_challenge_method": "S256",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 302, r.text
+    assert "invalid_scope" not in r.headers["location"]
+
+
+async def test_legacy_client_stored_without_scope_gets_all_scopes():
+    """Clients registered before the default (scope=None) are treated as all-scope."""
+    backend = FakeBackend()
+    p = _provider(backend)
+    await p.register_client(
+        OAuthClientInformationFull(client_id="old", redirect_uris=["https://x.test/cb"])
+    )
+    got = await _provider(backend).get_client("old")
+    assert got is not None
+    assert got.validate_scope("read") == ["read"]
+
+
+def _dcr_and_authorize(c, reg_scope, auth_scope):
+    body = {
+        "client_name": "Edge",
+        "redirect_uris": ["https://edge.test/cb"],
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+    if reg_scope is not None:
+        body["scope"] = reg_scope
+    reg = c.post("/register", json=body)
+    assert reg.status_code == 201, reg.text
+    params = {
+        "response_type": "code",
+        "client_id": reg.json()["client_id"],
+        "redirect_uri": "https://edge.test/cb",
+        "state": "s",
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "code_challenge_method": "S256",
+    }
+    if auth_scope is not None:
+        params["scope"] = auth_scope
+    r = c.get("/authorize", params=params, follow_redirects=False)
+    assert r.status_code == 302, r.text
+    return reg.json(), r.headers["location"]
+
+
+@pytest.mark.parametrize(
+    ("reg_scope", "auth_scope", "ok"),
+    [
+        ("read", "read", True),
+        ("read", "write", False),  # explicit subset still binds the client
+        ("read", "read write", False),
+        ("read run", "run", True),
+        (None, "read write run leaderboard:submit", True),
+        (None, None, True),  # no scope requested: unchanged pre-PR behaviour
+        ("", "read", True),  # empty registration scope == omitted -> defaults
+        (None, "", False),  # SDK rejects an empty `scope=` (fails closed)
+    ],
+)
+def test_dcr_scope_edge_cases(reg_scope, auth_scope, ok):
+    with TestClient(_app(_provider(FakeBackend())), base_url=GW) as c:
+        _reg, loc = _dcr_and_authorize(c, reg_scope, auth_scope)
+    assert ("invalid_scope" not in loc) is ok, loc
+
+
+def test_dcr_unknown_scope_rejected_at_registration():
+    with TestClient(_app(_provider(FakeBackend())), base_url=GW) as c:
+        reg = c.post(
+            "/register",
+            json={
+                "redirect_uris": ["https://edge.test/cb"],
+                "token_endpoint_auth_method": "none",
+                "scope": "read admin",
+            },
+        )
+    assert reg.status_code == 400
+    assert reg.json()["error"] == "invalid_client_metadata"
+
+
+async def test_backfill_keeps_explicit_scopes():
+    backend = FakeBackend()
+    await _provider(backend).register_client(
+        OAuthClientInformationFull(
+            client_id="narrow", redirect_uris=["https://x.test/cb"], scope="read"
+        )
+    )
+    got = await _provider(backend).get_client("narrow")
+    assert got is not None and got.scope == "read"

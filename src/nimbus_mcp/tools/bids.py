@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -12,20 +13,39 @@ from fastmcp import FastMCP
 from ..client import McpToolError, NimbusClient
 from ._annotations import LOCAL_WRITE
 from ._guards import safe_segment
+from ._hosted_files import inline_file, is_hosted_gateway
 
 
-def _read_manifest(zip_path: Path) -> dict[str, Any]:
-    """Pull nimbus_export_manifest.json out of the saved zip (summary fields)."""
-    with zipfile.ZipFile(zip_path) as zf:
-        member = next(
-            (n for n in zf.namelist() if n.endswith("nimbus_export_manifest.json")), None
-        )
+def _read_manifest(zip_src: Path | io.BytesIO, name: str) -> dict[str, Any]:
+    """Pull nimbus_export_manifest.json out of the zip (summary fields)."""
+    with zipfile.ZipFile(zip_src) as zf:
+        member = next((n for n in zf.namelist() if n.endswith("nimbus_export_manifest.json")), None)
         if member is None:
             raise McpToolError(
-                f"Export zip {zip_path.name} has no nimbus_export_manifest.json member — "
+                f"Export zip {name} has no nimbus_export_manifest.json member — "
                 "the backend response was not a Nimbus BIDS export."
             )
         return json.loads(zf.read(member))
+
+
+def _summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tier": manifest.get("tier"),
+        "subjects": manifest.get("subjects", []),
+        "files": len(manifest.get("dataFiles", [])),
+        "bytes": sum(f.get("bytes", 0) for f in manifest.get("dataFiles", [])),
+    }
+
+
+def _return_zip(client: Any, data: bytes, safe_stem: str) -> dict[str, Any]:
+    if is_hosted_gateway(client):
+        # Hosted: never write on the gateway; return bytes inline (capped).
+        filename = f"{safe_stem}-bids.zip"
+        manifest = _read_manifest(io.BytesIO(data), filename)
+        out = inline_file(data, filename, "export it from Nimbus Studio (BIDS export).")
+        out.update(_summary(manifest))
+        return out
+    return _save_zip(data, safe_stem, client.config.export_dir)
 
 
 def _save_zip(data: bytes, safe_stem: str, export_dir: Path) -> dict[str, Any]:
@@ -37,15 +57,8 @@ def _save_zip(data: bytes, safe_stem: str, export_dir: Path) -> dict[str, Any]:
         suffix += 1
         dest = out_dir / f"{safe_stem}-bids-{suffix}.zip"
     dest.write_bytes(data)
-    manifest = _read_manifest(dest)
-    return {
-        "path": str(dest),
-        "size": len(data),
-        "tier": manifest.get("tier"),
-        "subjects": manifest.get("subjects", []),
-        "files": len(manifest.get("dataFiles", [])),
-        "bytes": sum(f.get("bytes", 0) for f in manifest.get("dataFiles", [])),
-    }
+    manifest = _read_manifest(dest, dest.name)
+    return {"path": str(dest), "size": len(data), **_summary(manifest)}
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
@@ -55,7 +68,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         subjects: list[str] | None = None,
         kind: str | None = None,
     ) -> dict[str, Any]:
-        """Export a Nimbus dataset as a BIDS-layout zip saved to NIMBUS_EXPORT_DIR/bids/.
+        """Export a Nimbus dataset as a BIDS-layout zip (local: saved to
+        NIMBUS_EXPORT_DIR/bids/; hosted gateway: inline ``contentBase64``, up to 1 MB).
 
         Continuous sources (EDF/BDF uploads, stream recordings) export as BIDS-raw
         (EDF byte-passthrough; recordings converted HDF5→EDF with events.tsv).
@@ -81,14 +95,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             body["subjects"] = subjects
         data = client.post_bytes("/api/bids/export", json=body)
         safe_stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in dataset)[:80]
-        return _save_zip(data, safe_stem, client.config.export_dir)
+        return _return_zip(client, data, safe_stem)
 
     @mcp.tool(name="bids.export_execution", annotations=LOCAL_WRITE)
     def export_execution(execution_id: str) -> dict[str, Any]:
         """Export an execution's results as a BIDS-derivative zip (metrics.json,
         per-subject participants.tsv, protocol.json, full pipeline_snapshot.json,
-        predictions.tsv when stored, provenance/execution.json) saved to
-        NIMBUS_EXPORT_DIR/bids/.
+        predictions.tsv when stored, provenance/execution.json). Local: saved to
+        NIMBUS_EXPORT_DIR/bids/. Hosted gateway: inline ``contentBase64`` (up to
+        1 MB of base64); larger zips point to Nimbus Studio.
 
         Args:
             execution_id: Run whose results to export (from execution.run).
@@ -96,4 +111,4 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         exec_id = safe_segment(execution_id)
         body: dict[str, Any] = {"source": {"kind": "execution", "id": execution_id}}
         data = client.post_bytes("/api/bids/export", json=body)
-        return _save_zip(data, exec_id, client.config.export_dir)
+        return _return_zip(client, data, exec_id)

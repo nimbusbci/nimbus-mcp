@@ -95,7 +95,13 @@ class NimbusOAuthProvider(OAuthProvider):
         super().__init__(
             base_url=base_url,
             client_registration_options=ClientRegistrationOptions(
-                enabled=True, valid_scopes=list(NIMBUS_SCOPES)
+                enabled=True,
+                valid_scopes=list(NIMBUS_SCOPES),
+                # DCR clients that omit `scope` (e.g. Smithery) would otherwise be
+                # stored with scope=None, and the SDK then rejects every
+                # /authorize?scope=… with invalid_scope. The user still approves
+                # on the Studio consent page.
+                default_scopes=list(NIMBUS_SCOPES),
             ),
             revocation_options=RevocationOptions(enabled=False),
         )
@@ -141,9 +147,7 @@ class NimbusOAuthProvider(OAuthProvider):
                     self.revocation_options or RevocationOptions(),
                 )
                 metadata.issuer = self.issuer_url  # type: ignore[assignment]
-                metadata.token_endpoint_auth_methods_supported = list(
-                    TOKEN_ENDPOINT_AUTH_METHODS
-                )
+                metadata.token_endpoint_auth_methods_supported = list(TOKEN_ENDPOINT_AUTH_METHODS)
                 metadata.grant_types_supported = ["authorization_code"]
                 handler = MetadataHandler(metadata)
                 out.append(
@@ -157,6 +161,24 @@ class NimbusOAuthProvider(OAuthProvider):
                 )
             else:
                 out.append(route)
+                # Also serve protected-resource metadata at the root form
+                # (E2E 2026-10-21: only /.well-known/oauth-protected-resource/mcp
+                # answered; some clients probe the bare path first).
+                prm = "/.well-known/oauth-protected-resource"
+                if (
+                    isinstance(route, Route)
+                    and route.path.startswith(prm + "/")
+                    and not any(isinstance(r, Route) and r.path == prm for r in routes)
+                ):
+                    out.append(
+                        Route(
+                            path=prm,
+                            endpoint=route.endpoint,
+                            methods=route.methods or ["GET", "OPTIONS"],
+                            name=f"{route.name}-root" if route.name else None,
+                            include_in_schema=route.include_in_schema,
+                        )
+                    )
         return out
 
     # ── backend plumbing ────────────────────────────────────────────────────
@@ -186,6 +208,10 @@ class NimbusOAuthProvider(OAuthProvider):
         return info
 
     def _remember_client(self, info: OAuthClientInformationFull) -> None:
+        if info.scope is None:
+            # Clients registered before default_scopes existed were stored
+            # without a scope; treat them as registered for all supported scopes.
+            info.scope = " ".join(NIMBUS_SCOPES)
         with self._lock:
             if len(self._clients) >= _CLIENT_CACHE_MAX:
                 self._clients.clear()

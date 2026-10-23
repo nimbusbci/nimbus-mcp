@@ -50,9 +50,9 @@ Requirements), stream the synthetic BrainFlow board and watch modelless
 telemetry: quality + focus/relaxation indicators, no model, no headset:
 
 ```python
-device.list()                                              # synthetic board is listed
+device.list()  # synthetic board is listed
 # stream.start(confirm=true, device_type="brainflow_synthetic", ...)
-stream.telemetry(session_id=...)     # → quality + indicators, latestPrediction: null
+stream.telemetry(session_id=...)  # → quality + indicators, latestPrediction: null
 ```
 
 ## Copy-paste agent prompt

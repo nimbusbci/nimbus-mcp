@@ -52,9 +52,7 @@ def _filter_leaderboard(payload: dict[str, Any], dataset_id: str) -> dict[str, A
         if not isinstance(rows, list):
             return []
         kept = [
-            row
-            for row in rows
-            if isinstance(row, dict) and str(row.get("datasetId")) == dataset_id
+            row for row in rows if isinstance(row, dict) and str(row.get("datasetId")) == dataset_id
         ]
         if kept:
             matched = True
@@ -235,7 +233,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                         "Verified (server-side-scored) leaderboard "
                         "submissions are Pro on the hosted backend. Account "
                         "Free covers local work and the unverified-local "
-                        "lane (verification=\"unverified_local\")."
+                        'lane (verification="unverified_local").'
                     ),
                     local_alternative=(
                         "Score the model locally with execution.run / "
