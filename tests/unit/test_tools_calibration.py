@@ -563,7 +563,11 @@ async def test_train_sart_without_template_names_defaulted_paradigms():
     assert "template_id" in message
     assert "mi_headband_csp_lda" in message
     assert "p300_hardware_xdawn_lda" in message
-    assert "p300_hardware_xdawn_lda" in str(ei_target.value)
+    # Pin the target_hit branch prefix too — the error must name the paradigm
+    # the caller actually passed, not a hardcoded/mi-biased message.
+    target_message = str(ei_target.value)
+    assert "No default train template for paradigm 'target_hit'" in target_message
+    assert "p300_hardware_xdawn_lda" in target_message
 
 
 async def test_train_explicit_graph_skips_calibration_template_fetch():

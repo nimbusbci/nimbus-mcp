@@ -392,7 +392,9 @@ Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
 Neurofeedback protocols: `protocol.validate`/`protocol.save` (versioned specs),
 `protocol.start_assignment` (confirm-gated; simulated sources free, live hardware Pro),
 `protocol.session_status`/`pause`/`resume`/`stop`, `protocol.export_stats`
-(paired pre/post stats + figure + CSV)
+(paired pre/post stats + figure + CSV). Since 0.14.12 neither `protocol.save`
+nor `protocol.start_assignment` accepts a `name` argument (it was never
+persisted — versions carry `spec.name`).
 Projects: `project.create`, `project.list`, `project.save`, `project.load`, `project.rename`, `project.delete` (needs `confirm=true`)
 Python: `python.validate` (static contract check for BYO model code — no execution)
 Leaderboard: `leaderboard.submit` (BYO python_model → server-side LOSO scoring,
@@ -600,3 +602,7 @@ starts a live session on a human. The `X-MCP-Key` path is machine-local only
 `Authorization: Bearer` token from `nimbus-mcp login` (see **Authentication**
 above). Sessions started via MCP are stopped automatically after 15 idle
 minutes (see the watchdog note above).
+
+## License
+
+nimbus-mcp is licensed under the [Apache License 2.0](LICENSE). The nimbus-bci SDK is separately licensed: it is proprietary, free for non-commercial use, and requires a paid licence for commercial use.
