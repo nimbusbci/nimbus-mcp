@@ -50,8 +50,8 @@ jobs:
           mkdir -p /tmp/sdist
           curl -sL "https://pypi.org/pypi/nimbus-mcp/$V/json" \
             | jq -r '.urls[] | select(.packagetype == "sdist") | .url' \
-            | xargs curl -sL -o /tmp/sdist/pkg.tar.gz
-          tar -xzf /tmp/sdist/pkg.tar.gz -C /tmp/sdist --strip-components=1
+            | xargs curl -sL -o "$RUNNER_TEMP/pkg.tar.gz"
+          tar -xzf "$RUNNER_TEMP/pkg.tar.gz" -C /tmp/sdist --strip-components=1
 
       - name: Overlay release files
         if: steps.check.outputs.up_to_date == 'false'
@@ -60,6 +60,7 @@ jobs:
             --exclude '.git' \
             --exclude '.github' \
             --exclude '.gitignore' \
+            --exclude 'pkg.tar.gz' \
             /tmp/sdist/ ./
           # keep registry workflows + gitignore from this repo
 
