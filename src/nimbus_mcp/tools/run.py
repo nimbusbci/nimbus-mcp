@@ -396,6 +396,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         if full:
             return result
         metrics = result.get("metrics", {})
+        # Prefer held-out per-class rows; fall back to fit/train rows, labelled.
+        eval_rows = result.get("evalPerClassAccuracy")
+        if isinstance(eval_rows, list) and eval_rows:
+            per_class, per_class_split = eval_rows, "eval"
+        else:
+            per_class = result.get("perClassAccuracy")
+            per_class_split = "train" if per_class else None
         trimmed: dict[str, Any] = {
             "executionId": exec_id,
             "metrics": {k: metrics[k] for k in _METRIC_KEYS if metrics.get(k) is not None},
@@ -404,7 +411,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "confusionMatrixLabels": result.get("confusionMatrixLabels"),
             "evalConfusionMatrix": result.get("evalConfusionMatrix"),
             "evalConfusionMatrixLabels": result.get("evalConfusionMatrixLabels"),
-            "perClassAccuracy": result.get("perClassAccuracy"),
+            "perClassAccuracy": per_class,
+            "perClassAccuracySplit": per_class_split,
             "artifactFiles": [
                 {"name": f.get("name"), "size": f.get("size")}
                 for f in result.get("artifactFiles", [])

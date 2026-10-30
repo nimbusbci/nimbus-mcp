@@ -1,12 +1,13 @@
 Metadata-Version: 2.5
 Name: nimbus-mcp
-Version: 0.14.18
+Version: 0.14.19
 Summary: MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)
 Project-URL: Homepage, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Repository, https://github.com/nimbusbci/nimbus-mcp
 Project-URL: Changelog, https://github.com/nimbusbci/nimbus-mcp/releases
 License-Expression: Apache-2.0
 License-File: LICENSE
+License-File: NOTICE
 Classifier: Programming Language :: Python :: 3
 Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
 Requires-Python: >=3.10
@@ -70,6 +71,9 @@ figures agents need on Nimbus data).
 ```bash
 pip install nimbus-mcp   # or: uvx nimbus-mcp
 ```
+
+Both `uvx nimbus-mcp` and `python -m nimbus_mcp` (inside the env where it is installed) start the
+stdio MCP server. Agent-oriented install steps (e.g. for Cline): [llms-install.md](llms-install.md).
 
 (Also installable from the repo: `pip install -e nimbus-studio/mcp`.)
 
@@ -630,4 +634,7 @@ minutes (see the watchdog note above).
 
 ## License
 
-nimbus-mcp is licensed under the [Apache License 2.0](LICENSE). The nimbus-bci SDK is separately licensed: it is proprietary, free for non-commercial use, and requires a paid licence for commercial use.
+Only this MCP client/wrapper (`nimbus-mcp`) is licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE).
+The Nimbus engine (the `nimbus-bci` SDK), Nimbus Studio, the backend and the hosted services remain
+proprietary and are governed by their own terms. Pro features and verified leaderboard submissions
+require a paid Nimbus account.

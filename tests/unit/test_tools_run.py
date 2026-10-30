@@ -162,6 +162,34 @@ async def test_get_results_trimmed_by_default():
     assert result.data["computeOrigin"] == COMPUTE_ORIGIN
 
 
+async def test_get_results_prefers_eval_per_class_rows():
+    payload = {
+        "result": {
+            "metrics": {},
+            "perClassAccuracy": [{"class": "a", "accuracyPct": 90.0, "split": "train"}],
+            "evalPerClassAccuracy": [{"class": "a", "accuracyPct": 79.2, "split": "eval"}],
+        }
+    }
+    async with Client(make_server(lambda r: httpx.Response(200, json=payload))) as c:
+        result = await c.call_tool("execution.results", {"execution_id": "exec_1"})
+    assert result.data["perClassAccuracySplit"] == "eval"
+    assert result.data["perClassAccuracy"][0]["accuracyPct"] == 79.2
+
+
+async def test_get_results_labels_train_per_class_fallback():
+    payload = {
+        "result": {
+            "metrics": {},
+            "perClassAccuracy": [{"class": "a", "accuracyPct": 90.0}],
+            "evalPerClassAccuracy": [],
+        }
+    }
+    async with Client(make_server(lambda r: httpx.Response(200, json=payload))) as c:
+        result = await c.call_tool("execution.results", {"execution_id": "exec_1"})
+    assert result.data["perClassAccuracySplit"] == "train"
+    assert result.data["perClassAccuracy"][0]["accuracyPct"] == 90.0
+
+
 async def test_get_results_full_includes_everything():
     async with Client(make_server(lambda r: httpx.Response(200, json=FULL_RESULT))) as c:
         result = await c.call_tool("execution.results", {"execution_id": "exec_1", "full": True})

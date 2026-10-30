@@ -46,6 +46,9 @@ figures agents need on Nimbus data).
 pip install nimbus-mcp   # or: uvx nimbus-mcp
 ```
 
+Both `uvx nimbus-mcp` and `python -m nimbus_mcp` (inside the env where it is installed) start the
+stdio MCP server. Agent-oriented install steps (e.g. for Cline): [llms-install.md](llms-install.md).
+
 (Also installable from the repo: `pip install -e nimbus-studio/mcp`.)
 
 **Zero-hardware demo**: [examples/demo.md](examples/demo.md) — a copy-paste
@@ -605,4 +608,7 @@ minutes (see the watchdog note above).
 
 ## License
 
-nimbus-mcp is licensed under the [Apache License 2.0](LICENSE). The nimbus-bci SDK is separately licensed: it is proprietary, free for non-commercial use, and requires a paid licence for commercial use.
+Only this MCP client/wrapper (`nimbus-mcp`) is licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE).
+The Nimbus engine (the `nimbus-bci` SDK), Nimbus Studio, the backend and the hosted services remain
+proprietary and are governed by their own terms. Pro features and verified leaderboard submissions
+require a paid Nimbus account.
