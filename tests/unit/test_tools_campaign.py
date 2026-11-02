@@ -1412,3 +1412,45 @@ def test_gateway_header_read_token_refused(monkeypatch):
     assert str(excinfo.value).endswith(
         f"(code: {TOKEN_SCOPE_INSUFFICIENT_CODE}, correlationId: {cid})"
     )
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"accuracyPct": 69.6, "nGroups": 2},
+        {"accuracyPct": 69.6, "nGroups": 2, "groupKind": "session"},
+        {"accuracyPct": 69.6, "nGroups": 2, "cvGrouping": "subject-session"},
+    ],
+)
+def test_single_subject_kfold_kind_matches_stats_grouped(metrics):
+    """r7b: S01 k-fold with session nGroups was 'grouped' in experiment.get
+    but 'per_subject' in stats.grouped; both must agree on per_subject."""
+    graph = {
+        "nodes": [
+            {"id": "d", "type": "public_data", "config": {"subject": "S01"}},
+            {"id": "ep", "type": "evaluation_plan", "config": {"method": "kfold"}},
+        ],
+        "connections": [],
+    }
+    run = campaign.RunRow(
+        name="S01", train_graph=graph, execution_id="e1", status="completed", metrics=metrics
+    )
+    kind = campaign._infer_evaluation_kind(run)
+    assert kind == "per_subject"
+    payload = {"metrics": {**metrics, "evaluationMethod": "kfold"}}
+    assert campaign._infer_kind_from_payload_run(payload) == kind
+
+
+def test_multi_subject_kfold_still_grouped():
+    graph = {
+        "nodes": [
+            {"id": "d", "type": "public_data", "config": {"subject": "S01,S02,S03"}},
+            {"id": "ep", "type": "evaluation_plan", "config": {"method": "kfold"}},
+        ],
+        "connections": [],
+    }
+    run = campaign.RunRow(
+        name="all", train_graph=graph, execution_id="e1", status="completed",
+        metrics={"accuracyPct": 60.0, "nGroups": 3, "groupKind": "subject"},
+    )
+    assert campaign._infer_evaluation_kind(run) == "grouped"

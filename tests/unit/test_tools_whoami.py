@@ -83,7 +83,7 @@ async def test_whoami_token_mode_full_payload():
     token_info = data["token"]
     assert token_info["name"] == "dev token"
     assert token_info["daysLeft"] == 30
-    expected_iso = datetime.fromtimestamp(exp, timezone.utc).isoformat()
+    expected_iso = datetime.fromtimestamp(exp, timezone.utc).isoformat().replace("+00:00", "Z")
     assert token_info["expiresAt"] == expected_iso
     # never the raw secret, not even a prefix
     assert token not in json.dumps(data)

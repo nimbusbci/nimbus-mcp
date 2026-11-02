@@ -9,8 +9,10 @@ need explicit user confirmation. Four policies cover every nimbus tool:
   tool writes files into the user's NIMBUS_EXPORT_DIR, so it is not a pure
   read of its environment (readOnlyHint=false); safe to repeat.
 - ``MUTATING`` — creates/starts things (compute, uploads, live sessions).
-- ``DESTRUCTIVE`` — terminates existing work (a running execution, a live
-  EEG session); clients should confirm before calling.
+- ``DESTRUCTIVE`` — terminates or overwrites existing work (a running
+  execution, a live EEG/protocol session, a saved pipeline doc); clients
+  should confirm before calling.
+- ``IDEMPOTENT_MUTATING`` — a mutation that is safe to repeat (rename).
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from fastmcp.tools.function_tool import ToolAnnotations
 __all__ = [
     "DESTRUCTIVE",
     "FIGURE_OUTPUT_SCHEMA",
+    "IDEMPOTENT_MUTATING",
     "LOCAL_WRITE",
     "MUTATING",
     "READ_ONLY",
@@ -45,6 +48,15 @@ MUTATING = ToolAnnotations(
     read_only_hint=False,
     destructive_hint=False,
     idempotent_hint=False,
+    open_world_hint=True,
+)
+
+# Mutations where repeating the same call has no further effect (e.g. a
+# rename to the same name) (E2E r9 N3).
+IDEMPOTENT_MUTATING = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
     open_world_hint=True,
 )
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nimbus-mcp"
-version = "0.14.19"
+version = "0.14.20"
 description = "MCP server bridging AI agents to Nimbus BCI pipelines (device-flow login, desktop auto-discovery, or API key)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -18,12 +18,21 @@ dependencies = [
     "pydantic>=2.7",
 ]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
 [project.urls]
-Homepage = "https://github.com/nimbusbci/nimbus-mcp"
+Homepage = "https://nimbusbci.com/mcp"
+Documentation = "https://docs.nimbusbci.com"
 Repository = "https://github.com/nimbusbci/nimbus-mcp"
 Changelog = "https://github.com/nimbusbci/nimbus-mcp/releases"
 

@@ -20,6 +20,7 @@ headerless calls instead of guidance.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from contextlib import closing
@@ -355,7 +356,16 @@ class HeaderCredentialClient:
         file_path: Path,
         fields: dict[str, str] | None = None,
     ) -> Any:
-        return self._call("post_file", path, file_path, fields)
+        # Defense in depth for E2E r9 N1: a file path on the gateway is the
+        # SERVER's disk, never the caller's. No tool may upload from it.
+        from .errors import local_tool_error
+        from .tools._hosted_files import LOCAL_PATH_UNSUPPORTED
+
+        raise local_tool_error(
+            "Uploading local files is not supported on the hosted Nimbus gateway.",
+            code=LOCAL_PATH_UNSUPPORTED,
+            status_code=400,
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -399,3 +409,72 @@ class StripUnboundSessionIdMiddleware:
             await send(message)
 
         await self.app(scope, receive, _send)
+
+
+class ProtocolVersionHeaderMiddleware:
+    """Pure ASGI: clear 400 for an unsupported ``MCP-Protocol-Version`` header.
+
+    E2E round 10 L1: after ``initialize``, a request carrying
+    ``MCP-Protocol-Version: 1999-01-01`` reached the SDK's modern-envelope
+    path and came back as -32602 "params._meta must be an object …", pointing
+    at ``_meta`` instead of the header. Requests on an existing session with
+    an unknown version are answered here with "Unsupported protocol version"
+    and the supported list (as the spec's streamable-HTTP transport expects).
+    ``initialize`` (no session yet) is left to the SDK's version negotiation.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+        headers = {k.lower(): v for k, v in scope.get("headers") or []}
+        requested = headers.get(b"mcp-protocol-version")
+        if requested is None or b"mcp-session-id" not in headers:
+            await self.app(scope, receive, send)
+            return
+        version = requested.decode("latin-1").strip()
+        supported = supported_protocol_versions()
+        if version in supported:
+            await self.app(scope, receive, send)
+            return
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32600,
+                    "message": (
+                        f"Unsupported protocol version: MCP-Protocol-Version header "
+                        f"'{version[:64]}' is not supported. Supported versions: "
+                        f"{', '.join(supported)}."
+                    ),
+                    "data": {"requested": version[:64], "supported": supported},
+                },
+            }
+        ).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 400,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
+def supported_protocol_versions() -> list[str]:
+    """All protocol versions the installed MCP SDK serves (handshake + modern)."""
+    try:
+        from mcp_types.version import SUPPORTED_PROTOCOL_VERSIONS
+
+        return list(SUPPORTED_PROTOCOL_VERSIONS)
+    except ImportError:  # older SDK layout
+        from mcp.types import SUPPORTED_PROTOCOL_VERSIONS as legacy
+
+        return list(legacy)

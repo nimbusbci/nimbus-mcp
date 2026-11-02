@@ -16,7 +16,14 @@ from ..access import (
     tier_gate,
 )
 from ..client import McpToolError, NimbusClient
+from ..errors import local_tool_error
 from ._annotations import MUTATING, READ_ONLY
+from ._guards import INVALID_ARGUMENT, choice, require_choice, safe_segment
+
+_SUBMIT_TRACKS = ("cross_subject", "pretrained_few_trial")
+_VERIFICATIONS = ("verified", "unverified_local")
+SubmitTrackArg = choice(_SUBMIT_TRACKS)
+VerificationArg = choice(_VERIFICATIONS)
 
 _TRACK_KEYS = ("crossSubject", "pretrainedFewTrial")
 
@@ -79,7 +86,7 @@ def _filter_leaderboard(payload: dict[str, Any], dataset_id: str) -> dict[str, A
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="catalog.leaderboard", annotations=READ_ONLY)
+    @mcp.tool(name="catalog.leaderboard", title="Leaderboard", annotations=READ_ONLY)
     def get_leaderboard(dataset_id: str | None = None) -> dict[str, Any]:
         """Public benchmark leaderboard: pipeline rankings per dataset.
 
@@ -110,15 +117,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             return payload
         return _filter_leaderboard(payload, wanted)
 
-    @mcp.tool(name="leaderboard.submit", annotations=MUTATING)
+    @mcp.tool(name="leaderboard.submit", title="Submit to Leaderboard", annotations=MUTATING)
     def submit_leaderboard_model(
         dataset_id: str,
         name: str,
         code: str | None = None,
         class_name: str | None = None,
         requirements: list[str] | None = None,
-        track: str = "cross_subject",
-        verification: str = "verified",
+        track: SubmitTrackArg = "cross_subject",
+        verification: VerificationArg = "verified",
         backbone_kind: str | None = None,
         backbone_repo: str | None = None,
         backbone_revision: str | None = None,
@@ -177,10 +184,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 and scores frozen-embeddings → linear probe server-side. When
                 backbone_repo is set, omit code.
         """
-        if verification not in ("verified", "unverified_local"):
-            raise McpToolError(
+        require_choice(track, _SUBMIT_TRACKS, label="track")
+        if verification not in _VERIFICATIONS:
+            raise local_tool_error(
                 'verification must be "verified" (server-side scored) or '
-                f'"unverified_local" (locally computed); got {verification!r}.'
+                f'"unverified_local" (locally computed); got {verification!r}.',
+                code=INVALID_ARGUMENT,
             )
         mode = client_mode(client)
         if mode == MODE_ANONYMOUS:
@@ -283,7 +292,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 result.setdefault("scoring", "local-backend")
         return result
 
-    @mcp.tool(name="leaderboard.status", annotations=READ_ONLY)
+    @mcp.tool(
+        name="leaderboard.status", title="Leaderboard Submission Status", annotations=READ_ONLY
+    )
     def get_leaderboard_submission(submission_id: str) -> dict[str, Any]:
         """Fetch one of your leaderboard submissions (owner-only).
 
@@ -294,9 +305,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         Args:
             submission_id: The submissionId returned by leaderboard.submit.
         """
-        return client.get(f"/api/leaderboard/submissions/{submission_id}")
+        sid = safe_segment(submission_id, label="submission id")
+        return client.get(f"/api/leaderboard/submissions/{sid}")
 
-    @mcp.tool(name="leaderboard.mine", annotations=READ_ONLY)
+    @mcp.tool(name="leaderboard.mine", title="My Leaderboard Submissions", annotations=READ_ONLY)
     def list_my_leaderboard_submissions() -> dict[str, Any]:
         """List your leaderboard submissions (newest first), all datasets."""
         return client.get("/api/leaderboard/submissions")

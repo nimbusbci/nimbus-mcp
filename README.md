@@ -2,8 +2,7 @@
 
 <!-- mcp-name: io.github.nimbusbci/nimbus-mcp -->
 
-<!-- smithery badge: their /badge/ endpoint 500s platform-wide (2026-10-07); shields.io image + link keeps the badge rendering -->
-[![smithery badge](https://img.shields.io/badge/smithery-nimbusbci%2Fnimbus--mcp-2EA043)](https://smithery.ai/servers/nimbusbci/nimbus-mcp)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=nimbus&config=eyJ1cmwiOiJodHRwczovL25pbWJ1cy1tY3AuZmx5LmRldi9tY3AifQ==)
 [![M8ven Verified](https://m8ven.ai/badge/mcp/nimbusbci-nimbus-mcp-1xjm62?variant=verified&v=01611e09ab598e1f20772a0fc6bd1b96)](https://m8ven.ai/mcp/nimbusbci-nimbus-mcp-1xjm62?s=readme)
 
 MCP server that lets AI agents (Claude Code, Cursor, Claude Desktop) build, validate,
@@ -11,6 +10,84 @@ run, and analyze Nimbus BCI pipelines — upload their own EEG data, persist pip
 into studio projects, run multi-configuration experiment campaigns, watch live EEG
 sessions, and (explicitly confirmed) start live streaming — through your **local**
 Nimbus backend **or the hosted deployment, with one `nimbus-mcp login`**.
+
+**Docs:** [docs.nimbusbci.com](https://docs.nimbusbci.com) · **Overview:** [nimbusbci.com/mcp](https://nimbusbci.com/mcp) · Jump to [Quickstart](#quickstart-hosted-recommended)
+
+## Quickstart (hosted, recommended)
+
+Nothing to install: point your MCP client at the hosted server
+`https://nimbus-mcp.fly.dev/mcp`. On first use your client opens a browser
+sign-in to Nimbus Studio (OAuth) — no token to paste.
+
+**Cursor** — click the **Add to Cursor** button above, or put this in
+`.cursor/mcp.json` (or `~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "nimbus": { "url": "https://nimbus-mcp.fly.dev/mcp" }
+  }
+}
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add --transport http nimbus https://nimbus-mcp.fly.dev/mcp
+```
+
+**Claude Desktop / claude.ai:** Settings → Connectors → *Add custom connector*
+→ URL `https://nimbus-mcp.fly.dev/mcp`. (Custom connectors may require a
+paid Claude plan.)
+
+**Other clients (streamable HTTP):**
+
+```json
+{
+  "mcpServers": {
+    "nimbus": { "type": "http", "url": "https://nimbus-mcp.fly.dev/mcp" }
+  }
+}
+```
+
+**Headless / CI (no browser):** OAuth stays the primary path, but the
+gateway also accepts a Nimbus API key (create one on the Studio Account page)
+as a Bearer header:
+
+```json
+{
+  "mcpServers": {
+    "nimbus": {
+      "type": "http",
+      "url": "https://nimbus-mcp.fly.dev/mcp",
+      "headers": { "Authorization": "Bearer ${NIMBUS_TOKEN}" }
+    }
+  }
+}
+```
+
+```bash
+claude mcp add --transport http nimbus https://nimbus-mcp.fly.dev/mcp \
+  --header "Authorization: Bearer $NIMBUS_TOKEN"
+```
+
+### Try it in 60 seconds
+
+After sign-in, paste this prompt into your agent:
+
+> Benchmark a CSP + LDA motor-imagery pipeline on BCI IV 2a (`BNCI2014_001`),
+> show me the confusion matrix, and compare the score to the leaderboard.
+
+You should see the agent call `catalog.datasets` / `catalog.templates`,
+start a run with `execution.run`, poll `execution.get`, then show
+`execution.results` (accuracy / kappa), a `plots.*` figure and the
+`catalog.leaderboard` comparison — all on public MOABB data, no EEG device
+needed. The longer guided loop is in [examples/demo.md](examples/demo.md).
+
+The server also ships 5 ready-made MCP prompts (your client lists them as
+slash commands / prompt templates): `mi_csp_lda_bci_iv_2a`,
+`compare_mi_pipelines`, `foundation_backbones`, `inspect_my_eeg` and
+`leaderboard_standing`.
 
 ## Why nimbus-mcp (October 2026 field)
 
@@ -40,10 +117,21 @@ recording — different data plane), **no source localization / full MNE
 parity** (mne-mcp is a deep offline MNE wrapper; `plots.*` covers the
 figures agents need on Nimbus data).
 
-## Install
+## Install locally (stdio)
+
+Prefer running the server on your own machine (or using your local
+Studio desktop backend)? Sign in once, then use a secret-free config:
 
 ```bash
-pip install nimbus-mcp   # or: uvx nimbus-mcp
+uvx nimbus-mcp login     # or: pip install nimbus-mcp && nimbus-mcp login
+```
+
+```json
+{
+  "mcpServers": {
+    "nimbus": { "command": "uvx", "args": ["nimbus-mcp"] }
+  }
+}
 ```
 
 Both `uvx nimbus-mcp` and `python -m nimbus_mcp` (inside the env where it is installed) start the
@@ -78,8 +166,7 @@ Three ways to give the server a credential — tried in this order at startup:
      "mcpServers": {
        "nimbus": {
          "command": "uvx",
-         "args": ["nimbus-mcp"],
-         "env": { "NIMBUS_API_URL": "https://nimbus-studio.fly.dev" }
+         "args": ["nimbus-mcp"]
        }
      }
    }
@@ -284,7 +371,12 @@ token/key vars set, the login store and then the desktop key file are
 auto-discovered; with nothing found, the server runs in setup mode (every tool
 returns onboarding guidance).
 
-## Hosted gateway (streamable HTTP)
+## Self-hosting the gateway (streamable HTTP)
+
+The public gateway `https://nimbus-mcp.fly.dev/mcp` uses OAuth sign-in for
+interactive clients and also accepts `Authorization: Bearer <API key>` for
+headless/CI use — see [Quickstart](#quickstart-hosted-recommended). This
+section is for running your own.
 
 `nimbus-mcp serve` runs the same 63 tools over streamable HTTP instead of
 stdio — for remote MCP clients, registries (Smithery lists URL-based
@@ -298,17 +390,19 @@ The gateway binds **127.0.0.1 by default** — exposing it (`--host 0.0.0.0`)
 is explicit opt-in; combine that with the per-request tokens below (the
 gateway itself holds no credential to gate access with).
 
-The gateway holds **no** credential itself: each request's Nimbus API token
-arrives as a header, so one shared deployment serves many users as
-themselves. Calls without a header get setup guidance (add the header, or
-install locally via `uvx`).
+The gateway holds **no** credential itself: each request's Nimbus token
+arrives per request, so one shared deployment serves many users as
+themselves. With OAuth on (below, and on the public gateway) clients sign in
+in the browser. On a self-hosted gateway **without** OAuth, send the token as
+an `X-Nimbus-Token` or `Authorization: Bearer nimb_…` header; headerless calls
+then get setup guidance:
 
 ```json
 {
   "mcpServers": {
     "nimbus": {
       "type": "http",
-      "url": "https://nimbus-mcp.fly.dev/mcp",
+      "url": "http://127.0.0.1:8080/mcp",
       "headers": { "X-Nimbus-Token": "nimb_…  (Account → API tokens)" }
     }
   }
@@ -353,7 +447,10 @@ gateway app, and the same `MCP_OAUTH_GATEWAY_SECRET` on the backend. With the
 secret unset the backend answers the OAuth routes with `503
 nimbus.mcp.oauth_not_configured`.
 
-## Claude Code
+## Claude Code (local backend, advanced)
+
+For a hosted setup use the one-liner in [Quickstart](#quickstart-hosted-recommended).
+This form runs a dev checkout against a local backend with `MCP_LOCAL_KEY`:
 
 ```bash
 # --env flags go BEFORE the -- separator (everything after it is the literal
@@ -362,7 +459,11 @@ claude mcp add nimbus --env NIMBUS_MCP_KEY=choose-a-long-random-string \
   -- <path-to-mcp-venv>/bin/python -m nimbus_mcp
 ```
 
-## Cursor / Claude Desktop (stdio)
+## Cursor / Claude Desktop (stdio, local backend, advanced)
+
+Hosted or `uvx` setups need none of this — see
+[Quickstart](#quickstart-hosted-recommended) and
+[Install locally](#install-locally-stdio).
 
 ```json
 {
@@ -385,7 +486,7 @@ Inspect: `data.inspect_dataset`, `data.inspect_file` (EDA: channels, class balan
 Build: `pipeline.validate`, `pipeline.validate_node`
 Run: `execution.run` (non-blocking), `execution.get`, `execution.list`, `execution.results`, `execution.cancel`, `execution.delete` (needs `confirm=true`)
 
-Run summaries (`execution.get` / `execution.list`) carry two dataset fields: `dataset` is the human-readable display label (e.g. `BCIIV2a`), and `datasetId` is the catalog id (e.g. `BNCI2014_001`) that other tools accept (`data.inspect_dataset`, `public_data.dataset` in a graph). `title` is the run name shown in Studio.
+Run summaries (`execution.get` / `execution.list`) carry two dataset fields: `dataset` is the human-readable display label (e.g. `BCIIV2a`, i.e. BCI Competition IV 2a), and `datasetId` is the catalog id (e.g. `BNCI2014_001` — the same dataset) that other tools accept (`data.inspect_dataset`, `public_data.dataset` in a graph). `title` is the run name shown in Studio.
 Campaigns: `experiment.run` (non-blocking, 1-25 paced runs), `experiment.get`, `experiment.delete` (needs `confirm=true`)
 Artifacts: `execution.artifacts`, `execution.download_artifact`, `pipeline.export`
 Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),

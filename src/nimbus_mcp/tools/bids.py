@@ -12,8 +12,11 @@ from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
 from ._annotations import LOCAL_WRITE
-from ._guards import safe_segment
+from ._guards import choice, require_choice, safe_segment
 from ._hosted_files import inline_file, is_hosted_gateway
+
+_BIDS_KINDS = ("auto", "pack", "upload", "recording")
+BidsKindArg = choice(_BIDS_KINDS, optional=True)
 
 
 def _read_manifest(zip_src: Path | io.BytesIO, name: str) -> dict[str, Any]:
@@ -62,11 +65,11 @@ def _save_zip(data: bytes, safe_stem: str, export_dir: Path) -> dict[str, Any]:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="bids.export_dataset", annotations=LOCAL_WRITE)
+    @mcp.tool(name="bids.export_dataset", title="Export Dataset as BIDS", annotations=LOCAL_WRITE)
     def export_dataset(
         dataset: str,
         subjects: list[str] | None = None,
-        kind: str | None = None,
+        kind: BidsKindArg = None,
     ) -> dict[str, Any]:
         """Export a Nimbus dataset as a BIDS-layout zip (local: saved to
         NIMBUS_EXPORT_DIR/bids/; hosted gateway: inline ``contentBase64``, up to 1 MB).
@@ -90,6 +93,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # as returned by data.upload) — the id is a JSON body value, and the
         # backend enforces containment + ownership on it, so it passes through
         # verbatim. Only the LOCAL save filename stem is sanitized.
+        require_choice(kind, _BIDS_KINDS, label="kind", optional=True)
         body: dict[str, Any] = {"source": {"kind": kind or "auto", "id": dataset}}
         if subjects:
             body["subjects"] = subjects
@@ -97,7 +101,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         safe_stem = "".join(c if c.isalnum() or c in "-_." else "_" for c in dataset)[:80]
         return _return_zip(client, data, safe_stem)
 
-    @mcp.tool(name="bids.export_execution", annotations=LOCAL_WRITE)
+    @mcp.tool(name="bids.export_execution", title="Export Run as BIDS", annotations=LOCAL_WRITE)
     def export_execution(execution_id: str) -> dict[str, Any]:
         """Export an execution's results as a BIDS-derivative zip (metrics.json,
         per-subject participants.tsv, protocol.json, full pipeline_snapshot.json,

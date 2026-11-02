@@ -556,3 +556,36 @@ async def test_export_stats_posts_assignment_id():
     assert result.data["inferential"]["inferential"] is True
     assert result.data["figure"]["image"] == "aGk="
     assert result.data["csv"].startswith("sessionIndex")
+
+
+async def test_validate_strips_pydantic_url_input_ctx():
+    """Round 7: an older backend's raw pydantic rows must not leak docs URLs
+    or echoed input; agents get field path + message."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={
+                "valid": False,
+                "errors": [
+                    {
+                        "type": "missing",
+                        "loc": ["blocks", 0, "durationSec"],
+                        "msg": "Field required",
+                        "input": {"secret": "echoed"},
+                        "url": "https://errors.pydantic.dev/2/v/missing",
+                        "ctx": {"x": 1},
+                    }
+                ],
+            },
+        )
+
+    async with Client(make_server(handler)) as c:
+        result = await c.call_tool("protocol.validate", {"spec": {"id": "x"}})
+    row = result.data["errors"][0]
+    assert row == {
+        "field": "blocks.0.durationSec",
+        "loc": ["blocks", 0, "durationSec"],
+        "msg": "Field required",
+        "type": "missing",
+    }

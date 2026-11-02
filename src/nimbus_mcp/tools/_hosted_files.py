@@ -21,6 +21,35 @@ def is_hosted_gateway(client: Any) -> bool:
     return isinstance(client, HeaderCredentialClient)
 
 
+#: A local filesystem path was passed to the multi-user hosted gateway (E2E r9 N1).
+LOCAL_PATH_UNSUPPORTED = "nimbus.mcp.local_path_unsupported"
+
+#: Hint for figure tools refusing source="local" on the gateway.
+LOCAL_SOURCE_HINT = (
+    'Use source="upload" (data.upload with contentBase64) or source="dataset" instead.'
+)
+
+
+def refuse_local_path_on_gateway(client: Any, *, tool: str, hint: str) -> None:
+    """Refuse a caller-supplied LOCAL path when running as the hosted gateway.
+
+    The gateway's disk is not the caller's: resolving the path there would
+    read server files into the caller's account and, via differing errors,
+    act as a file-existence oracle. Raise BEFORE touching the filesystem, with
+    one fixed message whatever the path is (never echo it, never stat it).
+    """
+    if not is_hosted_gateway(client):
+        return
+    from ..errors import local_tool_error
+
+    raise local_tool_error(
+        f"{tool} cannot read local file paths on the hosted Nimbus gateway: the "
+        f"gateway runs on a remote server, not on your computer. {hint}",
+        code=LOCAL_PATH_UNSUPPORTED,
+        status_code=400,
+    )
+
+
 def inline_file(data: bytes, filename: str, studio_hint: str) -> dict[str, Any]:
     """``{filename, size, contentBase64, encoding}`` or ``{filename, size, note}``."""
     out: dict[str, Any] = {"filename": filename, "size": len(data)}

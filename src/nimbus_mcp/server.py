@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from fastmcp import FastMCP
@@ -15,7 +16,13 @@ from . import __version__, version_check
 from .client import NimbusClient, NullClient
 from .config import DEFAULT_SERVE_HOST, load_config
 from .errors import McpToolError
-from .product_telemetry import Telemetry, get_telemetry
+from .product_telemetry import (
+    GatewayTelemetry,
+    Telemetry,
+    get_telemetry,
+    reset_call_context,
+    set_call_context,
+)
 from .setup_mode import SetupRequired
 from .tools import (
     artifacts,
@@ -146,6 +153,47 @@ def _invalid_argument(message: str) -> str:
     return str(local_tool_error(message, code=INVALID_ARGUMENT))
 
 
+#: Fallback code for a tool error raised without one (round 7, 2026-10-30).
+TOOL_ERROR_CODE = "nimbus.mcp.tool_error"
+
+
+def _uncoded_tool_error(err: BaseException) -> McpToolError | None:
+    """The McpToolError behind ``err`` when it carries neither code nor id."""
+    # Only the explicit cause chain: FastMCP wraps tool exceptions with
+    # ``raise ToolError(...) from exc``. ``__context__`` would also match an
+    # McpToolError a tool already caught and deliberately replaced.
+    for cur in (err, err.__cause__):
+        if isinstance(cur, SetupRequired):
+            return None  # SetupGuidanceMiddleware owns these
+        if type(cur) is McpToolError:
+            if cur.code or cur.correlation_id:
+                return None
+            return cur
+    return None
+
+
+class ErrorEnvelopeMiddleware(Middleware):
+    """Every tool error carries a stable ``code`` and a ``correlationId``.
+
+    Most raises already use :func:`errors.local_tool_error` or come from the
+    backend with its own code/id. Anything left (a bare ``McpToolError``) is
+    re-tagged here with ``nimbus.mcp.tool_error`` + a fresh correlation id, so
+    support can always tie an agent report to a log line.
+    """
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next: CallNext) -> ToolResult:
+        from .errors import local_tool_error
+
+        try:
+            return await call_next(context)
+        except Exception as err:
+            bare = _uncoded_tool_error(err)
+            if bare is None:
+                raise
+            tagged = local_tool_error(str(bare), code=TOOL_ERROR_CODE, status_code=bare.status_code)
+            raise ToolError(str(tagged)) from tagged
+
+
 class SetupGuidanceMiddleware(Middleware):
     """Converts :class:`SetupRequired` into the structured guidance dict.
 
@@ -259,6 +307,52 @@ def _access_mode_of(client: object) -> str:
     return "anonymous"
 
 
+def _client_info_of(params: object) -> dict[str, str | None]:
+    # MCP SDK v2 names it `client_info`; v1 used `clientInfo`.
+    info = getattr(params, "client_info", None) or getattr(params, "clientInfo", None)
+    name = getattr(info, "name", None)
+    version = getattr(info, "version", None)
+    return {
+        "mcp_client_name": str(name)[:64] if name else None,
+        "mcp_client_version": str(version)[:32] if version else None,
+    }
+
+
+_PROCESS_SESSION_ID = uuid.uuid4().hex
+
+
+def _call_context(context: object, client: object, *, http: bool = False) -> dict[str, object]:
+    """Per-call telemetry context; every lookup is best-effort.
+
+    ``session_id``: the ``Mcp-Session-Id`` on the HTTP gateway; for stdio one
+    process is one client session, so a per-process id (FastMCP generates a
+    fresh id per request on non-HTTP transports).
+    """
+    ctx: dict[str, object] = {}
+    fctx = getattr(context, "fastmcp_context", None)
+    try:
+        session = getattr(fctx, "session", None) if fctx is not None else None
+        ctx.update(_client_info_of(getattr(session, "client_params", None)))
+    except Exception:  # noqa: BLE001
+        pass
+    ctx["session_id"] = _PROCESS_SESSION_ID
+    if http:
+        try:
+            if fctx is not None:
+                ctx["session_id"] = str(fctx.session_id)
+        except Exception:  # noqa: BLE001
+            pass
+    claims_fn = getattr(client, "current_token_claims", None)
+    if callable(claims_fn):
+        try:
+            claims = claims_fn() or {}
+            ctx["_subject"] = claims.get("sub")
+            ctx["_email"] = claims.get("email")
+        except Exception:  # noqa: BLE001
+            pass
+    return ctx
+
+
 def _error_code_of(err: BaseException) -> str:
     """Stable error CODE for telemetry — never the message text (X12)."""
     seen: set[int] = set()
@@ -285,9 +379,36 @@ class ProductTelemetryMiddleware(Middleware):
 
     def __init__(self, telemetry: Telemetry, client: object) -> None:
         self._telemetry = telemetry
+        self._client = client
         self._mode = _access_mode_of(client)
+        # mcp_session_started fires on a session's first tool call (works for
+        # both `initialize` and FastMCP 4 `server/discover` handshakes).
+        # Dedupe is per process: a gateway restart, multiple Fly machines, or
+        # the 10k reset can re-emit it for a live session, so treat
+        # session counts as an upper bound (count distinct session_id).
+        self._seen_sessions: set[str] = set()
 
     async def on_call_tool(
+        self,
+        context: MiddlewareContext,
+        call_next: CallNext,
+    ) -> ToolResult:
+        ctx = _call_context(
+            context, self._client, http=getattr(self._telemetry, "transport", "") == "gateway"
+        )
+        token = set_call_context(ctx)
+        try:
+            session_id = ctx.get("session_id")
+            if isinstance(session_id, str) and session_id not in self._seen_sessions:
+                if len(self._seen_sessions) >= 10_000:
+                    self._seen_sessions.clear()
+                self._seen_sessions.add(session_id)
+                self._telemetry.session_started()
+            return await self._on_call_tool(context, call_next)
+        finally:
+            reset_call_context(token)
+
+    async def _on_call_tool(
         self,
         context: MiddlewareContext,
         call_next: CallNext,
@@ -370,11 +491,13 @@ def build_server(
     install_expected_condition_log_filter()
     mcp.add_middleware(SetupGuidanceMiddleware())
     mcp.add_middleware(ArgumentGuardMiddleware(mcp))
+    mcp.add_middleware(ErrorEnvelopeMiddleware())
     if product_telemetry is None:
         # The hosted gateway has no install identity and must not attach
-        # per-install consent notices to other people's sessions.
+        # per-install consent notices to other people's sessions; its
+        # telemetry is operator opt-in (NIMBUS_MCP_GATEWAY_TELEMETRY=on).
         product_telemetry = (
-            Telemetry.disabled()
+            GatewayTelemetry()
             if type(client).__name__ == "HeaderCredentialClient"
             else get_telemetry()
         )
@@ -445,12 +568,15 @@ def serve(host: str = DEFAULT_SERVE_HOST, port: int = 8080, path: str = "/mcp") 
         )
     from starlette.middleware import Middleware as AsgiMiddleware
 
-    from .hosted import StripUnboundSessionIdMiddleware
+    from .hosted import ProtocolVersionHeaderMiddleware, StripUnboundSessionIdMiddleware
 
-    build_server(client, product_telemetry=Telemetry.disabled(), auth=auth).run(
+    build_server(client, product_telemetry=GatewayTelemetry(), auth=auth).run(
         transport="http",
         host=host,
         port=port,
         path=path,
-        middleware=[AsgiMiddleware(StripUnboundSessionIdMiddleware)],
+        middleware=[
+            AsgiMiddleware(StripUnboundSessionIdMiddleware),
+            AsgiMiddleware(ProtocolVersionHeaderMiddleware),
+        ],
     )

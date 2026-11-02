@@ -36,6 +36,9 @@ requires an explicit opt-in.
 
 from __future__ import annotations
 
+import contextvars
+import hashlib
+import hmac
 import json
 import os
 import platform
@@ -52,6 +55,7 @@ DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com"
 DEFAULT_POSTHOG_KEY = "phc_zmAy1HGn7pGiytU6eOoX1zMD0rSd9WmT1NWOymhmxK9"  # public project token
 
 EVENTS = (
+    "session_started",
     "first_run",
     "first_local_result",
     "tool_completed",
@@ -100,6 +104,41 @@ def _env_override() -> str | None:
     return None
 
 
+_CALL_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "nimbus_mcp_telemetry_call_context", default=None
+)
+# Keys only used to derive identity/flags; never sent to PostHog.
+_PRIVATE_CONTEXT_KEYS = ("_subject", "_email")
+_TRUTHY = ("1", "true", "on", "yes")
+
+
+def set_call_context(ctx: dict[str, Any]) -> contextvars.Token:
+    """Per-call props (client name/version, session id, gateway subject)."""
+    return _CALL_CONTEXT.set(dict(ctx))
+
+
+def reset_call_context(token: contextvars.Token) -> None:
+    _CALL_CONTEXT.reset(token)
+
+
+SUBJECT_HASH_KEY_ENV = "NIMBUS_MCP_SUBJECT_HASH_KEY"
+
+
+def hash_subject(subject: str, key: str | None) -> str | None:
+    """HMAC-SHA256 pseudonym for an OAuth subject (gateway distinct_id).
+
+    Keyed by the operator secret ``NIMBUS_MCP_SUBJECT_HASH_KEY`` so the id
+    cannot be recomputed from a known subject without the key. Returns
+    ``None`` when no key is configured: subject-level ids are then disabled
+    (events go out as ``gateway_anonymous``) rather than falling back to a
+    guessable unkeyed hash.
+    """
+    if not key:
+        return None
+    digest = hmac.new(key.encode(), subject.encode(), hashlib.sha256).hexdigest()
+    return "sub_" + digest[:32]
+
+
 def duration_bucket(seconds: float) -> str:
     if seconds < 1:
         return "<1s"
@@ -132,6 +171,8 @@ class Telemetry:
         self._first_run_attempted = False
         self._first_local_result_attempted = False
         self._state: dict[str, Any] | None = None
+
+    transport = "local"
 
     @classmethod
     def disabled(cls) -> Telemetry:
@@ -378,19 +419,29 @@ class Telemetry:
         sync: bool = False,
         on_done: Callable[[bool], None] | None = None,
     ) -> None:
+        ctx = dict(_CALL_CONTEXT.get() or {})
+        distinct_id = self._distinct_id(ctx)
+        is_internal = self._is_internal(ctx)
+        for key in _PRIVATE_CONTEXT_KEYS:
+            ctx.pop(key, None)
         props: dict[str, Any] = {
             "$ip": "",
             "$geoip_disable": True,
             "$process_person_profile": False,
-            "client_version": __version__,
+            "client_version": __version__,  # legacy name: the nimbus-mcp version
+            "mcp_version": __version__,
+            "transport": self.transport,
             "os_family": platform.system().lower(),
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "install_id": distinct_id,
+            "is_internal": is_internal,
         }
+        props.update({k: v for k, v in ctx.items() if v is not None})
         props.update(properties)
         payload = {
             "api_key": self._api_key(),
             "event": f"mcp_{event}",
-            "distinct_id": str(self._load().get("install_id")),
+            "distinct_id": distinct_id,
             "properties": props,
         }
         if sync:
@@ -398,6 +449,16 @@ class Telemetry:
             return
         thread = threading.Thread(target=self._safe_send, args=(payload, on_done), daemon=True)
         thread.start()
+
+    def _distinct_id(self, ctx: dict[str, Any]) -> str:
+        return str(self._load().get("install_id"))
+
+    def _is_internal(self, ctx: dict[str, Any]) -> bool:
+        """Dev/test installs self-flag with NIMBUS_MCP_INTERNAL=1."""
+        return self._environ.get("NIMBUS_MCP_INTERNAL", "").strip().lower() in _TRUTHY
+
+    def session_started(self) -> None:
+        self.capture("session_started", {})
 
     def _safe_send(
         self,
@@ -451,6 +512,82 @@ class Telemetry:
             "version_drift_warned",
             {"client_version": current, "latest_version": latest, "mode": mode},
         )
+
+
+class GatewayTelemetry(Telemetry):
+    """Hosted-gateway telemetry: operator opt-in, no install state, no notices.
+
+    Off unless the deployment sets ``NIMBUS_MCP_GATEWAY_TELEMETRY=on``;
+    ``NIMBUS_MCP_TELEMETRY=off`` still kills it. ``distinct_id`` is an
+    HMAC-SHA256 of the OAuth ``sub`` keyed by ``NIMBUS_MCP_SUBJECT_HASH_KEY``
+    (never the raw subject/email); without that key every event uses the
+    shared id ``gateway_anonymous`` (no per-user counts). Subjects or
+    emails listed in ``NIMBUS_MCP_INTERNAL_SUBJECTS`` (comma-separated, raw
+    or already hashed) are tagged ``is_internal=true`` for query exclusion.
+    """
+
+    transport = "gateway"
+
+    def __init__(
+        self,
+        *,
+        sender: Callable[[dict[str, Any]], None] | None = None,
+        environ: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(state_path=Path(os.devnull), sender=sender, environ=environ)
+        raw = self._environ.get("NIMBUS_MCP_INTERNAL_SUBJECTS", "")
+        self._internal = {x.strip().lower() for x in raw.split(",") if x.strip()}
+        self._hash_key = self._environ.get(SUBJECT_HASH_KEY_ENV, "").strip() or None
+
+    def consent(self) -> str:
+        if self._environ.get("NIMBUS_MCP_TELEMETRY", "").strip().lower() == "off":
+            return _CONSENT_DENIED
+        flag = self._environ.get("NIMBUS_MCP_GATEWAY_TELEMETRY", "").strip().lower()
+        return _CONSENT_GRANTED if flag in _TRUTHY else _CONSENT_DENIED
+
+    def set_consent(self, granted: bool) -> None:  # operator-controlled only
+        return None
+
+    def pending_notice(self) -> dict[str, Any] | None:
+        return None
+
+    def _load(self) -> dict[str, Any]:
+        return {}
+
+    def _update(self, **changes: Any) -> None:
+        return None
+
+    def capture(
+        self,
+        event: str,
+        properties: dict[str, Any] | None = None,
+        *,
+        sync: bool = False,
+    ) -> None:
+        # Install-lifecycle events make no sense for a shared server.
+        if event not in EVENTS or event in ("first_run", "first_local_result"):
+            return
+        try:
+            if self.enabled():
+                self._dispatch(event, properties or {}, sync=sync)
+        except Exception:  # noqa: BLE001 - telemetry must never break tools
+            pass
+
+    def _distinct_id(self, ctx: dict[str, Any]) -> str:
+        subject = ctx.get("_subject")
+        hashed = hash_subject(str(subject), self._hash_key) if subject else None
+        return hashed or "gateway_anonymous"
+
+    def _is_internal(self, ctx: dict[str, Any]) -> bool:
+        if not self._internal:
+            return False
+        subject = str(ctx.get("_subject") or "").lower()
+        email = str(ctx.get("_email") or "").lower()
+        candidates = {c for c in (subject, email) if c}
+        hashed = hash_subject(str(ctx.get("_subject")), self._hash_key) if subject else None
+        if hashed:
+            candidates.add(hashed)
+        return bool(candidates & self._internal)
 
 
 _SINGLETON: Telemetry | None = None

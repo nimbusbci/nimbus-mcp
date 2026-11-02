@@ -134,7 +134,7 @@ def _layout_or_none(layout: Any) -> dict[str, Any] | None:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="calibration.start", annotations=MUTATING)
+    @mcp.tool(name="calibration.start", title="Start Calibration", annotations=MUTATING)
     def start(
         paradigm: str = "mi",
         confirm: bool = False,
@@ -248,7 +248,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "dashboardHint": "The Studio app shows the cues. Poll calibration.status.",
         }
 
-    @mcp.tool(name="calibration.status", annotations=READ_ONLY)
+    @mcp.tool(name="calibration.status", title="Calibration Status", annotations=READ_ONLY)
     def status(execution_id: str) -> dict[str, Any]:
         """Live snapshot of a calibration session (phase, current trial, progress,
         paused). Once complete, carries the recorded upload — call
@@ -281,7 +281,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 )
         return out
 
-    @mcp.tool(name="calibration.pause", annotations=MUTATING)
+    @mcp.tool(name="calibration.pause", title="Pause Calibration", annotations=MUTATING)
     def pause(execution_id: str) -> dict[str, Any]:
         """Pause a running calibration between trials (cues hold; resume anytime).
 
@@ -291,7 +291,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         exec_id = safe_segment(execution_id)
         return client.post("/api/pause-calibration", json={"executionId": exec_id})
 
-    @mcp.tool(name="calibration.resume", annotations=MUTATING)
+    @mcp.tool(name="calibration.resume", title="Resume Calibration", annotations=MUTATING)
     def resume(execution_id: str) -> dict[str, Any]:
         """Resume a paused calibration session.
 
@@ -301,7 +301,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         exec_id = safe_segment(execution_id)
         return client.post("/api/resume-calibration", json={"executionId": exec_id})
 
-    @mcp.tool(name="calibration.train", annotations=MUTATING)
+    @mcp.tool(name="calibration.train", title="Train Calibration Model", annotations=MUTATING)
     def train(
         execution_id: str,
         paradigm: str = "mi",

@@ -499,32 +499,31 @@ _KIND_ORDER = ("per_subject", "within_session", "loso", "losco", "pretrained_few
 def _infer_evaluation_kind(run: RunRow) -> str:
     """Classify a completed run for aggregate kind labelling (#470).
 
-    Prefers the evaluation_plan method on the posted graph. Single-subject
-    within-session / k-fold runs are labelled ``per_subject`` so a mixed
-    campaign's ``kindBreakdown`` separates them from LOSO. Falls back to
-    metrics: ``nGroups`` marks a multi-subject / LOSO-style grouped run.
+    Prefers the evaluation_plan method on the posted graph, then uses the
+    same signals as backend ``stats.grouped`` (groupKind / cvGrouping, with
+    the graph's subject count as a fallback). Single-subject runs are
+    ``per_subject``; bare ``nGroups`` (session folds) never implies grouped.
     """
     method = _evaluation_method_from_graph(run.train_graph)
     n_subjects = _public_data_subject_count(run.train_graph)
-    if method == "loso":
-        return "loso"
-    if method == "losco":
-        return "losco"
-    if method == "pretrained_few_trial":
-        return "pretrained_few_trial"
-    if method == "within_session":
-        if n_subjects is not None and n_subjects >= 2:
-            return "within_session"
-        return "per_subject"
-    if method in {"kfold", "stratified_kfold"}:
-        metrics = run.metrics or {}
-        if metrics.get("nGroups") is not None or (n_subjects is not None and n_subjects >= 2):
-            return "grouped"
-        return "per_subject"
-    metrics = run.metrics or {}
-    if metrics.get("nGroups") is not None:
-        return "loso"
-    return "per_subject"
+    metrics = run.metrics if isinstance(run.metrics, dict) else {}
+    n_groups = _coerce_n_groups(metrics.get("nGroups"))
+    group_kind_raw = metrics.get("groupKind")
+    group_kind = (
+        str(group_kind_raw).strip().lower() if isinstance(group_kind_raw, str) else None
+    )
+    if group_kind not in ("subject", "session"):
+        group_kind = _group_kind_from_cv_grouping(str(metrics.get("cvGrouping") or ""))
+    if group_kind is None and n_subjects is not None and n_subjects >= 2:
+        # Multi-subject public-data graph: groups are subjects.
+        group_kind = "subject"
+        if n_groups is None:
+            n_groups = n_subjects
+    # r7b: delegate to the same classifier stats.grouped mirrors so a run's
+    # kind is identical in experiment.get and stats.grouped. Previously a
+    # single-subject (S01) k-fold run carrying session-level nGroups was
+    # labelled "grouped" here but "per_subject" by stats.grouped.
+    return _infer_kind_from_signals(method, n_groups, group_kind)
 
 
 def _headline_accuracy_pct(metrics: dict[str, Any] | None) -> float | None:
@@ -824,8 +823,29 @@ def _ensure_kind_breakdown(
     out["runs"] = runs
     out_agg = dict(aggregates)
     out_agg["kindBreakdown"] = refreshed
+    out_agg.pop("poolingNote", None)
+    out_agg.update(_pooling_label(refreshed))
     out["aggregates"] = out_agg
     return out
+
+
+def _pooling_label(breakdown: list[dict[str, Any]]) -> dict[str, Any]:
+    """Say in words what the pooled headline mixes (round 7, 2026-10-30).
+
+    ``kindBreakdown`` already separates the kinds; this adds a flat flag plus a
+    one-line note so a reader of ``mean`` alone sees that LOSO and per-subject
+    runs were averaged together (they answer different questions).
+    """
+    kinds = [str(b.get("kind")) for b in breakdown if b.get("kind")]
+    mixed = len(set(kinds)) > 1
+    label: dict[str, Any] = {"pooledEvaluationKinds": kinds, "mixedEvaluationKinds": mixed}
+    if mixed:
+        label["poolingNote"] = (
+            "The pooled mean/std/best mix evaluation kinds ("
+            + ", ".join(kinds)
+            + "); compare per-kind means in kindBreakdown instead."
+        )
+    return label
 
 
 def _compute_aggregates(runs: list[RunRow]) -> dict[str, Any]:
@@ -862,6 +882,7 @@ def _compute_aggregates(runs: list[RunRow]) -> dict[str, Any]:
         ]
         aggregates["pooledRunNames"] = [run.name for run in completed]
         aggregates["kindBreakdown"] = _kind_breakdown_from_run_rows(completed)
+        aggregates.update(_pooling_label(aggregates["kindBreakdown"]))
     return aggregates
 
 
@@ -897,7 +918,7 @@ def _experiment_worker(
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="experiment.run", annotations=MUTATING)
+    @mcp.tool(name="experiment.run", title="Run Experiment", annotations=MUTATING)
     def run_experiment(runs: list[dict[str, Any]], max_concurrent: int = 2) -> dict[str, Any]:
         """Run 1-25 pipelines as ONE paced experiment (NON-BLOCKING). Returns an
         experimentId immediately; a background thread submits at most 2 runs at
@@ -1040,7 +1061,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "with the same account; the record is stored on the Nimbus server.",
         }
 
-    @mcp.tool(name="experiment.delete", annotations=DESTRUCTIVE)
+    @mcp.tool(name="experiment.delete", title="Delete Experiment", annotations=DESTRUCTIVE)
     def delete_experiment(experiment_id: str, confirm: bool = False) -> dict[str, Any]:
         """Delete one of your experiment records (server + this machine's local
         cache). Its individual runs are kept — delete them with execution.delete.
@@ -1076,9 +1097,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 f"Unknown experiment '{exp_id}' for this account.",
                 code="nimbus.experiment.not_found",
             )
-        return {"deleted": True, "experimentId": exp_id}
+        # By design runs are retained (execution.delete removes them).
+        return {
+            "deleted": True,
+            "experimentId": exp_id,
+            "runsRetained": True,
+            "note": "Runs launched by this experiment are kept; delete them with execution.delete.",
+        }
 
-    @mcp.tool(name="experiment.get", annotations=READ_ONLY)
+    @mcp.tool(name="experiment.get", title="Get Experiment", annotations=READ_ONLY)
     def get_experiment(experiment_id: str) -> dict[str, Any]:
         """Experiment snapshot: status (running/completed/failed), per-run rows
         ({name, executionId, status, error?, metrics?, evaluationKind?}) and,

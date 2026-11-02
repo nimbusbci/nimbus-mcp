@@ -18,6 +18,8 @@ from fastmcp import FastMCP
 from ..client import McpToolError, NimbusClient
 from ..errors import local_tool_error
 from ._annotations import READ_ONLY
+from ._guards import PACK_MODES, choice, require_choice
+from ._hosted_files import LOCAL_PATH_UNSUPPORTED, is_hosted_gateway
 
 # Backend error code for "local paths are not trusted on this deployment"
 # (api_codes.DATA_DESCRIBE_LOCAL_FORBIDDEN): flat RFC7807 body, top-level code.
@@ -53,6 +55,17 @@ _HOSTED_LOCAL_OPTIONS: list[dict[str, str]] = [
 ]
 
 
+ModeArg = choice(PACK_MODES)
+
+
+def _hosted_local_error(code: str, status_code: int) -> McpToolError:
+    """Tool error (isError) carrying the upload-first guidance (E2E r9 N4)."""
+    options = " ".join(f"- {o['action']}: {o['detail']}" for o in _HOSTED_LOCAL_OPTIONS)
+    return local_tool_error(
+        f"{_HOSTED_LOCAL_MESSAGE} {options}", code=code, status_code=status_code
+    )
+
+
 def register(mcp: FastMCP, client: NimbusClient) -> None:
     def _default_subject(dataset: str) -> str | None:
         """Catalog ``defaultSubject`` for ``dataset`` (E2E 2026-10-21), else None."""
@@ -64,11 +77,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         value = entry.get("defaultSubject") if isinstance(entry, dict) else None
         return str(value) if value else None
 
-    @mcp.tool(name="data.inspect_dataset", annotations=READ_ONLY)
+    @mcp.tool(name="data.inspect_dataset", title="Inspect Dataset", annotations=READ_ONLY)
     def inspect_dataset(
         dataset: str,
         subject: str | None = None,
-        mode: str = "all",
+        mode: ModeArg = "all",
     ) -> dict[str, Any]:
         """Exploratory summary of a public EEG dataset (MOABB pack): channels,
         sampling rate, trial/class balance, per-channel µV stats, band powers
@@ -90,6 +103,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 the catalog defaultSubject.
             mode: Which split to summarize — training | evaluation | all.
         """
+        require_choice(mode, PACK_MODES, label="mode")
         params: dict[str, Any] = {"source": "dataset", "dataset": dataset, "mode": mode}
         if subject is None:
             subject = _default_subject(dataset)
@@ -97,7 +111,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             params["subject"] = subject
         return client.get("/api/data/describe", params=params)
 
-    @mcp.tool(name="data.inspect_file", annotations=READ_ONLY)
+    @mcp.tool(name="data.inspect_file", title="Inspect Data File", annotations=READ_ONLY)
     def inspect_file(path: str, sampling_rate: float | None = None) -> dict[str, Any]:
         """Exploratory summary of an EEG file (.edf/.bdf/.mat/.csv/.tsv/.txt/.h5):
         channels, sampling rate, trial/class balance, per-channel µV stats,
@@ -113,8 +127,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         montage/reference problem worth fixing first. Units note: values are
         ASSUMED volts by the loader — a µV-native CSV reads 1e6x too large;
         set unitsScale in a pipeline's custom_data config when needed. On a
-        hosted backend absolute paths are refused and this returns guidance
-        (upload the file first or switch to a local backend).
+        hosted backend absolute paths are refused with an error that explains
+        how to proceed (upload the file first or switch to a local backend).
 
         CSV/TSV/TXT files have no embedded sampling rate: pass sampling_rate
         (Hz) for them — the backend never assumes 250 Hz. Formats that embed
@@ -132,6 +146,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # file that exists (same contract as data.upload).
         resolved = os.path.expanduser(path)
         source = "local" if os.path.isabs(resolved) else "upload"
+        if source == "local" and is_hosted_gateway(client):
+            # Refuse up front on the gateway: never send a server-disk path.
+            raise _hosted_local_error(LOCAL_PATH_UNSUPPORTED, 400)
         params: dict[str, Any] = {"source": source, "path": resolved}
         if sampling_rate is not None:
             if not math.isfinite(sampling_rate) or sampling_rate <= 0:
@@ -154,10 +171,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             return client.get("/api/data/describe", params=params)
         except McpToolError as err:
             if source == "local" and err.status_code == 403 and err.code == _LOCAL_FORBIDDEN_CODE:
-                # Hosted backend: setup-style guidance instead of a dead end.
-                return {
-                    "ok": False,
-                    "message": _HOSTED_LOCAL_MESSAGE,
-                    "options": [dict(option) for option in _HOSTED_LOCAL_OPTIONS],
-                }
+                # Hosted backend: a tool error (isError) that still carries the
+                # guidance, consistent with other refusals (E2E r9 N4).
+                raise _hosted_local_error(_LOCAL_FORBIDDEN_CODE, 403) from None
             raise

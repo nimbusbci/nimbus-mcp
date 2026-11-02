@@ -12,7 +12,7 @@ from ._guards import safe_segment
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="stream.telemetry", annotations=READ_ONLY)
+    @mcp.tool(name="stream.telemetry", title="EEG Stream Telemetry", annotations=READ_ONLY)
     def get_live_session(session_id: str, window: int = 50) -> dict[str, Any]:
         """Live snapshot of a streaming session: latest prediction + recent window,
         signal quality (meanChannelQuality, snrDb, artifactProbability), indicators,

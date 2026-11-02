@@ -148,3 +148,41 @@ async def test_list_datasets_on_disk_filter():
     assert ids == ["BNCI2014_001"]
     entry = result.data["datasets"][0]
     assert entry["channels"] == 22 and entry["subjectsCount"] == 2
+
+
+# ── round 7 (2026-10-30): plural aliases, unknown category, coded not-found ──
+
+
+@pytest.mark.parametrize("alias", ["models", "Models", "model"])
+async def test_list_nodes_accepts_plural_category_alias(alias):
+    server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
+    async with Client(server) as c:
+        result = await c.call_tool("catalog.nodes", {"category": alias})
+    assert [n["id"] for n in result.data["nodes"]] == ["rxlda_sdk"]
+
+
+async def test_list_nodes_features_alias():
+    server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
+    async with Client(server) as c:
+        result = await c.call_tool("catalog.nodes", {"category": "features"})
+    assert [n["id"] for n in result.data["nodes"]] == ["csp"]
+
+
+async def test_list_nodes_unknown_category_lists_valid_ones():
+    server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
+    async with Client(server) as c:
+        with pytest.raises(Exception) as ei:
+            await c.call_tool("catalog.nodes", {"category": "classifiers"})
+    msg = str(ei.value)
+    assert "Valid categories: feature, model" in msg
+    assert "nimbus.catalog.unknown_category" in msg
+    assert "correlationId" in msg
+
+
+async def test_get_node_schema_unknown_type_has_code_and_correlation_id():
+    server = make_server(lambda req: httpx.Response(200, json=NODE_TYPES))
+    async with Client(server) as c:
+        with pytest.raises(Exception) as ei:
+            await c.call_tool("catalog.node_schema", {"node_type": "nope"})
+    assert "nimbus.catalog.node_type_not_found" in str(ei.value)
+    assert "correlationId" in str(ei.value)

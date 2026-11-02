@@ -6,14 +6,19 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from ..client import McpToolError, NimbusClient
-from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
+from ..client import NimbusClient
+from ..errors import local_tool_error
+from ._annotations import DESTRUCTIVE, IDEMPOTENT_MUTATING, MUTATING, READ_ONLY
 from ._guards import safe_segment
+from ._time import iso_utc
 from .run import synth_layout
+
+#: project.save stale-revision conflict (E2E r9 N4): a stable, specific code.
+DOC_CONFLICT = "nimbus.project.doc_conflict"
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="project.create", annotations=MUTATING)
+    @mcp.tool(name="project.create", title="Create Project", annotations=MUTATING)
     def create_project(name: str, description: str | None = None) -> dict[str, Any]:
         """Create a project (container for one pipeline document). Returns projectId.
 
@@ -28,7 +33,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         project = payload.get("project", {})
         return {"ok": True, "projectId": project.get("id"), "name": project.get("name")}
 
-    @mcp.tool(name="project.list", annotations=READ_ONLY)
+    @mcp.tool(name="project.list", title="List Projects", annotations=READ_ONLY)
     def list_projects() -> dict[str, Any]:
         """List projects owned by the current principal (agent work included)."""
         payload = client.get("/api/projects")
@@ -39,13 +44,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                     "id": p.get("id"),
                     "name": p.get("name"),
                     "description": p.get("description"),
-                    "updatedAt": p.get("updatedAt"),
+                    "updatedAt": iso_utc(p.get("updatedAt")),
                 }
                 for p in payload.get("projects", [])
             ],
         }
 
-    @mcp.tool(name="project.save", annotations=MUTATING)
+    @mcp.tool(name="project.save", title="Save Project Pipeline", annotations=DESTRUCTIVE)
     def save_pipeline(
         project_id: str,
         train_graph: dict[str, Any],
@@ -84,11 +89,13 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             body["subject"] = subject
         payload = client.put(f"/api/projects/{pid}/doc", json=body)
         if payload.get("status") == 409:
-            raise McpToolError(
-                f"Pipeline save conflict ({payload.get('code', 'conflict')}): "
+            raise local_tool_error(
+                f"Pipeline save conflict ({payload.get('code') or DOC_CONFLICT}): "
                 f"expected revision {revision} is stale. Call project.load('{pid}') "
                 "to fetch the latest revision, merge your changes on top, then "
-                "project.save again with that revision as expected_revision."
+                "project.save again with that revision as expected_revision.",
+                code=payload.get("code") or DOC_CONFLICT,
+                status_code=409,
             )
         return {
             "ok": payload.get("ok", True),
@@ -97,7 +104,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "message": payload.get("message"),
         }
 
-    @mcp.tool(name="project.load", annotations=READ_ONLY)
+    @mcp.tool(name="project.load", title="Load Project", annotations=READ_ONLY)
     def load_pipeline(project_id: str) -> dict[str, Any]:
         """Load a project's saved pipeline (train graph + meta) for editing/re-running.
 
@@ -114,7 +121,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "train": payload.get("train"),
         }
 
-    @mcp.tool(name="project.rename", annotations=MUTATING)
+    @mcp.tool(name="project.rename", title="Rename Project", annotations=IDEMPOTENT_MUTATING)
     def rename_project(project_id: str, name: str) -> dict[str, Any]:
         """Rename a project you own (max 200 characters).
 
@@ -127,7 +134,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         project = payload.get("project") or {}
         return {"projectId": project.get("id", pid), "name": project.get("name", name)}
 
-    @mcp.tool(name="project.delete", annotations=DESTRUCTIVE)
+    @mcp.tool(name="project.delete", title="Delete Project", annotations=DESTRUCTIVE)
     def delete_project(project_id: str, confirm: bool = False) -> dict[str, Any]:
         """Delete a project (and its saved pipeline document) from the studio workspace.
 

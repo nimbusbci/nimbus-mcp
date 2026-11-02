@@ -42,7 +42,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
-from ._annotations import MUTATING, READ_ONLY
+from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
 from ._guards import safe_segment
 from .run import synth_layout
 
@@ -183,8 +183,30 @@ def _mint_deploy_execution(
     return str(execution_id)
 
 
+def _sanitize_violations(errors: Any) -> list[dict[str, Any]]:
+    """Field path + message only: drop pydantic ``url`` / ``input`` / ``ctx``.
+
+    The backend sanitizes too (round 7, 2026-10-30); this keeps older backends
+    from leaking docs links and echoed input to agents.
+    """
+    if not isinstance(errors, list):
+        return [{"field": "(root)", "loc": [], "msg": str(errors)}]
+    out: list[dict[str, Any]] = []
+    for e in errors:
+        if not isinstance(e, dict):
+            out.append({"field": "(root)", "loc": [], "msg": str(e)})
+            continue
+        loc = [p for p in (e.get("loc") or []) if isinstance(p, str | int)]
+        field = e.get("field") or ".".join(str(p) for p in loc) or "(root)"
+        row: dict[str, Any] = {"field": str(field), "loc": loc, "msg": str(e.get("msg", ""))}
+        if e.get("type"):
+            row["type"] = str(e["type"])
+        out.append(row)
+    return out
+
+
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="protocol.validate", annotations=READ_ONLY)
+    @mcp.tool(name="protocol.validate", title="Validate Protocol", annotations=READ_ONLY)
     def validate(spec: dict[str, Any]) -> dict[str, Any]:
         """Validate a neurofeedback protocol document WITHOUT saving it.
         Returns {valid: true, spec} on success, or {valid: false, errors: [...]}
@@ -204,10 +226,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         if payload.get("spec"):
             out["spec"] = payload["spec"]
         if payload.get("errors"):
-            out["errors"] = payload["errors"]
+            out["errors"] = _sanitize_violations(payload["errors"])
         return out
 
-    @mcp.tool(name="protocol.save", annotations=MUTATING)
+    @mcp.tool(name="protocol.save", title="Save Protocol", annotations=MUTATING)
     def save(spec: dict[str, Any], confirm: bool = False) -> dict[str, Any]:
         """Validate and persist the NEXT VERSION of a protocol document
         (confirm-gated: each call appends a version row; accidental calls
@@ -231,12 +253,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "version": payload.get("version"),
         }
 
-    @mcp.tool(name="protocol.list", annotations=READ_ONLY)
+    @mcp.tool(name="protocol.list", title="List Protocols", annotations=READ_ONLY)
     def list_protocols() -> dict[str, Any]:
         """Every saved protocol id at its latest version."""
         return client.get("/api/protocols")
 
-    @mcp.tool(name="protocol.start_assignment", annotations=MUTATING)
+    @mcp.tool(
+        name="protocol.start_assignment", title="Start Protocol Assignment", annotations=MUTATING
+    )
     def start_assignment(
         protocol_id: str,
         protocol_version: int,
@@ -368,7 +392,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             ),
         }
 
-    @mcp.tool(name="protocol.session_status", annotations=READ_ONLY)
+    @mcp.tool(
+        name="protocol.session_status", title="Protocol Session Status", annotations=READ_ONLY
+    )
     def session_status(session_id: str, window: int = 50) -> dict[str, Any]:
         """Live snapshot of a protocol deploy session: the scheduler block /
         session progress + threshold state (under ``protocol``) beside the
@@ -383,7 +409,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "/api/hardware/session-live", params={"sessionId": sess_id, "window": window}
         )
 
-    @mcp.tool(name="protocol.pause", annotations=MUTATING)
+    @mcp.tool(name="protocol.pause", title="Pause Protocol Session", annotations=MUTATING)
     def pause(session_id: str) -> dict[str, Any]:
         """Pause a running protocol session (blocks freeze; the session and
         device stay alive — resume with protocol.resume). Simulated and
@@ -395,7 +421,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         sess_id = safe_segment(session_id, label="session id")
         return client.post("/api/hardware/pause-stream", json={"sessionId": sess_id})
 
-    @mcp.tool(name="protocol.resume", annotations=MUTATING)
+    @mcp.tool(name="protocol.resume", title="Resume Protocol Session", annotations=MUTATING)
     def resume(session_id: str, chunk_size: int = 125, n_channels: int = 4) -> dict[str, Any]:
         """Resume a paused protocol session (restarts the server-driven device
         loop). Live-hardware resume requires a Pro plan; simulated sessions are
@@ -412,7 +438,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             json={"sessionId": sess_id, "chunkSize": chunk_size, "nChannels": n_channels},
         )
 
-    @mcp.tool(name="protocol.stop", annotations=MUTATING)
+    @mcp.tool(name="protocol.stop", title="Stop Protocol Session", annotations=DESTRUCTIVE)
     def stop(session_id: str) -> dict[str, Any]:
         """Stop a protocol session (always safe to call): stops streaming,
         saves the block-annotated recording, advances the assignment when the
@@ -437,7 +463,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "sessions once enough have completed.",
         }
 
-    @mcp.tool(name="protocol.export_stats", annotations=READ_ONLY)
+    @mcp.tool(name="protocol.export_stats", title="Export Protocol Stats", annotations=READ_ONLY)
     def export_stats(assignment_id: str) -> dict[str, Any]:
         """Paired pre/post analysis for one assignment's recorded sessions:
         per-block aggregates (descriptive + CSV), paired t / Wilcoxon / dz

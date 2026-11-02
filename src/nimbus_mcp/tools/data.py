@@ -10,18 +10,26 @@ from typing import Any
 from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
+from ..errors import local_tool_error
 from ._annotations import DESTRUCTIVE, MUTATING
 from ._guards import safe_upload_path
+from ._hosted_files import refuse_local_path_on_gateway
 
 _USAGE = (
     "Use this path as a custom_data node's filePath in execution.run/pipeline.validate "
     '(config: {"filePath": "<path>", "format": "<format>", ...}).'
 )
 _HEADERLESS_EXTS = {".csv", ".tsv", ".txt"}
+#: data.upload was given a local path that is not an existing file (E2E r9 N4).
+FILE_NOT_FOUND = "nimbus.mcp.file_not_found"
+_GATEWAY_UPLOAD_HINT = (
+    "Upload the file from Nimbus Studio (web app), or run nimbus-mcp locally "
+    "(stdio / desktop app), where data.upload reads files from your own disk."
+)
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="data.upload", annotations=MUTATING)
+    @mcp.tool(name="data.upload", title="Upload Data File", annotations=MUTATING)
     def upload_data(
         file_path: str,
         dataset_name: str | None = None,
@@ -42,9 +50,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             sampling_rate: Hz for headerless CSV/TSV/TXT (REQUIRED there, e.g. 250.0).
             format: Override extension-based detection (auto|mat|csv|tsv|txt|edf|bdf|h5|hdf5).
         """
+        # Hosted gateway: never resolve the caller's path on the server's own
+        # disk (file-existence oracle / server file exfiltration, E2E r9 N1).
+        refuse_local_path_on_gateway(client, tool="data.upload", hint=_GATEWAY_UPLOAD_HINT)
         path = Path(file_path).expanduser()
         if not path.is_file():
-            raise McpToolError(f"File not found: {file_path}")
+            raise local_tool_error(
+                f"File not found: {file_path}", code=FILE_NOT_FOUND, status_code=404
+            )
         fields: dict[str, str] = {}
         if dataset_name:
             fields["dataset_name"] = dataset_name
@@ -78,7 +91,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "usage": _USAGE,
         }
 
-    @mcp.tool(name="data.delete_upload", annotations=DESTRUCTIVE)
+    @mcp.tool(name="data.delete_upload", title="Delete Upload", annotations=DESTRUCTIVE)
     def delete_upload(path: str, confirm: bool = False) -> dict[str, Any]:
         """Delete an uploaded file from your account (disk + registry).
 

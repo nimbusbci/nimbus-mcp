@@ -90,7 +90,8 @@ async def test_experiment_delete_removes_local_and_server(_disk):
     (d / "x1.json").write_text("{}")
     async with Client(server) as c:
         r = await c.call_tool("experiment.delete", {"experiment_id": "x1", "confirm": True})
-        assert r.data == {"deleted": True, "experimentId": "x1"}
+        assert r.data["deleted"] is True and r.data["experimentId"] == "x1"
+        assert r.data["runsRetained"] is True
         assert not (d / "x1.json").exists()
         gone = await c.call_tool(
             "experiment.delete", {"experiment_id": "x1", "confirm": True}, raise_on_error=False
