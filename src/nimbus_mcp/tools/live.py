@@ -78,12 +78,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         with binding as bound:
             return _stop_chain(sess_id, bound)
 
-    @mcp.tool(name="device.list", annotations=READ_ONLY)
+    @mcp.tool(name="device.list", title="List EEG Devices", annotations=READ_ONLY)
     def list_devices() -> dict[str, Any]:
         """EEG devices supported by this backend (OpenBCI, Muse, BrainBit, LSL, PiEEG...)."""
         return client.get("/api/deployment/devices")
 
-    @mcp.tool(name="device.test", annotations=READ_ONLY)
+    @mcp.tool(name="device.test", title="Test EEG Device", annotations=READ_ONLY)
     def test_device(
         device_type: str,
         connection_type: str | None = None,
@@ -120,7 +120,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         }
         return client.post("/api/deployment/test-device", json=_device_body(device_type, values))
 
-    @mcp.tool(name="stream.start", annotations=MUTATING)
+    @mcp.tool(name="stream.start", title="Start EEG Stream", annotations=MUTATING)
     def start_stream(
         device_type: str,
         confirm: bool = False,
@@ -254,7 +254,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "with stream.stop(session_id).",
         }
 
-    @mcp.tool(name="stream.status", annotations=READ_ONLY)
+    @mcp.tool(name="stream.status", title="EEG Stream Status", annotations=READ_ONLY)
     def stream_status(session_id: str) -> dict[str, Any]:
         """Live snapshot of a streaming session (running, deviceConnected).
         Polling this also feeds the idle watchdog: each call resets the
@@ -270,7 +270,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         activity.note_activity(sess_id)
         return client.get("/api/hardware/stream-status", params={"sessionId": sess_id})
 
-    @mcp.tool(name="stream.stop", annotations=DESTRUCTIVE)
+    @mcp.tool(name="stream.stop", title="Stop EEG Stream", annotations=DESTRUCTIVE)
     def stop_stream(session_id: str) -> dict[str, Any]:
         """Stop a streaming session and disconnect the device (always safe to call).
         Also removes the session from the idle watchdog so it cannot fire after

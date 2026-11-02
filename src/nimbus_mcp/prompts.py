@@ -40,17 +40,21 @@ EXAMPLE_PROMPTS: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
         "Pick a foundation backbone",
         "Benchmark every pretrained EEG backbone on a dataset and pick the best one.",
         "Which pretrained EEG foundation backbone works best on BCI Competition IV 2a "
-        "(BNCI2014_001), subject 1? Run foundation.compare with source='dataset' and show "
-        "the ranked chart with accuracy, confidence interval and wall time.",
-        ("foundation.compare",),
+        "(BNCI2014_001), subject 1? Confirm the dataset id with catalog.datasets, run "
+        "foundation.compare with source='dataset' and show the ranked chart with "
+        "accuracy, confidence interval and wall time.",
+        ("catalog.datasets", "foundation.compare"),
     ),
     "inspect_my_eeg": (
         "Inspect my EEG file",
         "Upload a recording and get an exploratory summary before building a pipeline.",
         "Upload my EEG recording with data.upload (pass sampling_rate if it's a "
-        "CSV/TSV/TXT file), then run data.inspect_file on it and summarize the channels, "
-        "sampling rate, class balance and band powers. Suggest a matching starter "
-        "template from catalog.templates.",
+        "CSV/TSV/TXT file), then run data.inspect_file on the path data.upload returns "
+        "(a server path like user_.../file.edf, not my local path) and summarize the "
+        "channels, sampling rate, class balance and band powers. Note: data.upload reads "
+        "files from MY disk only when nimbus-mcp runs locally (stdio / desktop app); on "
+        "the hosted server, upload the file in Nimbus Studio instead and use that path. "
+        "Suggest a matching starter template from catalog.templates (filter by paradigm).",
         ("data.upload", "data.inspect_file", "catalog.templates"),
     ),
     "leaderboard_standing": (

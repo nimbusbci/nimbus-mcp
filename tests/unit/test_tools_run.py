@@ -190,6 +190,34 @@ async def test_get_results_labels_train_per_class_fallback():
     assert result.data["perClassAccuracy"][0]["accuracyPct"] == 90.0
 
 
+async def test_get_results_labels_oof_per_class_rows():
+    """E2E r6: OOF CV rows are labelled oof end to end, not eval/train."""
+    rows = [{"class": "a", "accuracyPct": 86.0, "split": "oof"}]
+    payload = {
+        "result": {
+            "metrics": {},
+            "perClassAccuracy": rows,
+            "evalPerClassAccuracy": [dict(r) for r in rows],
+        }
+    }
+    async with Client(make_server(lambda r: httpx.Response(200, json=payload))) as c:
+        result = await c.call_tool("execution.results", {"execution_id": "exec_1"})
+    assert result.data["perClassAccuracySplit"] == "oof"
+    assert result.data["perClassAccuracy"][0]["split"] == "oof"
+
+
+async def test_get_results_oof_train_slot_fallback():
+    payload = {
+        "result": {
+            "metrics": {},
+            "perClassAccuracy": [{"class": "a", "accuracyPct": 86.0, "split": "oof"}],
+        }
+    }
+    async with Client(make_server(lambda r: httpx.Response(200, json=payload))) as c:
+        result = await c.call_tool("execution.results", {"execution_id": "exec_1"})
+    assert result.data["perClassAccuracySplit"] == "oof"
+
+
 async def test_get_results_full_includes_everything():
     async with Client(make_server(lambda r: httpx.Response(200, json=FULL_RESULT))) as c:
         result = await c.call_tool("execution.results", {"execution_id": "exec_1", "full": True})
@@ -332,3 +360,13 @@ async def test_duplicate_preflight_failure_never_blocks_run():
     async with Client(make_server(handler)) as c:
         r = await c.call_tool("execution.run", {"train_graph": TRAIN_GRAPH})
     assert posts == [1] and "warning" not in r.data
+
+
+async def test_get_results_pending_202_raises_not_ready():
+    body = {"ok": False, "executionId": "exec_1", "status": "running"}
+    async with Client(make_server(lambda r: httpx.Response(202, json=body))) as c:
+        result = await c.call_tool(
+            "execution.results", {"execution_id": "exec_1"}, raise_on_error=False
+        )
+    assert result.is_error
+    assert "not ready" in str(result.content[0].text)

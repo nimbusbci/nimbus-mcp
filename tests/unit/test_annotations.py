@@ -66,9 +66,14 @@ def test_annotation_policy_invariants():
         "execution.delete",
         "experiment.delete",
         "project.delete",
+        # E2E r9 N3: project.save overwrites the doc; protocol.stop ends a
+        # live session exactly like stream.stop.
+        "project.save",
+        "protocol.stop",
         "stream.stop",
     }
     assert tools["project.rename"].annotations.destructive_hint is False
+    assert tools["project.rename"].annotations.idempotent_hint is True
     assert tools["project.rename"].annotations.read_only_hint is False
     # The two rail-gated tools must not claim read-only.
     assert tools["stream.start"].annotations.read_only_hint is False

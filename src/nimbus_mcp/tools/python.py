@@ -21,7 +21,7 @@ _USAGE = (
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="python.validate", annotations=READ_ONLY)
+    @mcp.tool(name="python.validate", title="Validate Python Model", annotations=READ_ONLY)
     def validate_python_model(
         code: str,
         class_name: str | None = None,

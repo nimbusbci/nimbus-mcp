@@ -21,13 +21,26 @@ from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
 
 from ..client import McpToolError, NimbusClient
+from ..errors import local_tool_error
 from ._annotations import FIGURE_OUTPUT_SCHEMA, LOCAL_WRITE
-from ._guards import safe_segment
-from ._hosted_files import is_hosted_gateway
+from ._guards import (
+    DATA_SOURCES,
+    INVALID_ARGUMENT,
+    PACK_MODES,
+    choice,
+    require_choice,
+    safe_segment,
+)
+from ._hosted_files import LOCAL_SOURCE_HINT, is_hosted_gateway, refuse_local_path_on_gateway
 
 _PLOT_KINDS = ("psd", "topomap", "bandpower", "spectrogram")
 _BANDS = ("delta", "theta", "alpha", "beta", "gamma")
 _TRACKS = ("within_session", "crossSubject", "pretrained_few_trial")
+KindArg = choice(_PLOT_KINDS)
+BandArg = choice(_BANDS)
+TrackArg = choice(_TRACKS)
+SourceArg = choice(DATA_SOURCES)
+ModeArg = choice(PACK_MODES)
 
 
 def _decode_png(payload: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
@@ -77,7 +90,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # structuredContent typed by FIGURE_OUTPUT_SCHEMA.
         return ToolResult(content=[Image(data=png, format="png")], structured_content=info)
 
-    @mcp.tool(name="plots.confusion", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
+    @mcp.tool(
+        name="plots.confusion",
+        title="Plot Confusion Matrix",
+        annotations=LOCAL_WRITE,
+        output_schema=FIGURE_OUTPUT_SCHEMA,
+    )
     def confusion(
         execution_id: str,
         matrix: str = "eval",
@@ -97,21 +115,28 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """
         exec_id = safe_segment(execution_id)
         if matrix not in ("eval", "train"):
-            raise McpToolError(f"matrix must be 'eval' or 'train'; got {matrix!r}.")
+            raise local_tool_error(
+                f"matrix must be 'eval' or 'train'; got {matrix!r}.", code=INVALID_ARGUMENT
+            )
         payload = client.post(
             "/api/plots/confusion", json={"executionId": exec_id, "matrix": matrix}
         )
         return _figure_response(payload, f"{exec_id}-{matrix}-confusion", save)
 
-    @mcp.tool(name="plots.dataset", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
+    @mcp.tool(
+        name="plots.dataset",
+        title="Plot Dataset",
+        annotations=LOCAL_WRITE,
+        output_schema=FIGURE_OUTPUT_SCHEMA,
+    )
     def dataset(
-        kind: str,
-        source: str,
+        kind: KindArg,
+        source: SourceArg,
         dataset: str | None = None,
         subject: str | None = None,
-        mode: str = "all",
+        mode: ModeArg = "all",
         path: str | None = None,
-        band: str = "alpha",
+        band: BandArg = "alpha",
         channel_idx: int = 0,
         save: bool = False,
     ) -> ToolResult:
@@ -135,9 +160,21 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 its path. Ignored on the hosted gateway (the image is returned inline).
         """
         if kind not in _PLOT_KINDS:
-            raise McpToolError(f"kind must be one of {_PLOT_KINDS}; got {kind!r}.")
+            raise local_tool_error(
+                f"kind must be one of {_PLOT_KINDS}; got {kind!r}.", code=INVALID_ARGUMENT
+            )
         if band not in _BANDS:
-            raise McpToolError(f"band must be one of {_BANDS}; got {band!r}.")
+            raise local_tool_error(
+                f"band must be one of {_BANDS}; got {band!r}.", code=INVALID_ARGUMENT
+            )
+        require_choice(source, DATA_SOURCES, label="source")
+        require_choice(mode, PACK_MODES, label="mode")
+        if source == "local":
+            refuse_local_path_on_gateway(
+                client,
+                tool="plots.dataset",
+                hint=LOCAL_SOURCE_HINT,
+            )
         stem = _safe_stem("dataset", dataset or path or source, subject, kind)
         payload = client.post(
             "/api/plots/dataset",
@@ -154,12 +191,17 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         )
         return _figure_response(payload, stem, save)
 
-    @mcp.tool(name="plots.erp", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
+    @mcp.tool(
+        name="plots.erp",
+        title="Plot ERP",
+        annotations=LOCAL_WRITE,
+        output_schema=FIGURE_OUTPUT_SCHEMA,
+    )
     def erp(
-        source: str,
+        source: SourceArg,
         dataset: str | None = None,
         subject: str | None = None,
-        mode: str = "all",
+        mode: ModeArg = "all",
         path: str | None = None,
         max_channels: int = 16,
         save: bool = False,
@@ -180,6 +222,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             save: Local/stdio: also write the PNG to NIMBUS_EXPORT_DIR/plots/ and return
                 its path. Ignored on the hosted gateway (the image is returned inline).
         """
+        require_choice(source, DATA_SOURCES, label="source")
+        require_choice(mode, PACK_MODES, label="mode")
+        if source == "local":
+            refuse_local_path_on_gateway(
+                client,
+                tool="plots.erp",
+                hint=LOCAL_SOURCE_HINT,
+            )
         stem = _safe_stem("erp", dataset or path or source, subject)
         payload = client.post(
             "/api/plots/erp",
@@ -194,10 +244,15 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         )
         return _figure_response(payload, stem, save)
 
-    @mcp.tool(name="plots.leaderboard", annotations=LOCAL_WRITE, output_schema=FIGURE_OUTPUT_SCHEMA)
+    @mcp.tool(
+        name="plots.leaderboard",
+        title="Plot Leaderboard",
+        annotations=LOCAL_WRITE,
+        output_schema=FIGURE_OUTPUT_SCHEMA,
+    )
     def leaderboard(
         dataset_id: str,
-        track: str = "within_session",
+        track: TrackArg = "within_session",
         save: bool = False,
     ) -> ToolResult:
         """Leaderboard bar chart for one dataset: accuracy with 95% CI
@@ -218,6 +273,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """
         ds_id = safe_segment(dataset_id, label="dataset id")
         if track not in _TRACKS:
-            raise McpToolError(f"track must be one of {_TRACKS}; got {track!r}.")
+            raise local_tool_error(
+                f"track must be one of {_TRACKS}; got {track!r}.", code=INVALID_ARGUMENT
+            )
         payload = client.post("/api/plots/leaderboard", json={"datasetId": ds_id, "track": track})
         return _figure_response(payload, f"leaderboard-{ds_id}-{track}", save)

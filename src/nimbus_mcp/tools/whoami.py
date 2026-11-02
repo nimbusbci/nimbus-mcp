@@ -35,7 +35,9 @@ def _token_info(client: NimbusClient) -> dict[str, Any] | None:
     info.update(token_access_summary(claims))
     exp = claims.get("exp")
     if isinstance(exp, (int, float)) and not isinstance(exp, bool):
-        info["expiresAt"] = datetime.fromtimestamp(exp, timezone.utc).isoformat()
+        info["expiresAt"] = (
+            datetime.fromtimestamp(exp, timezone.utc).isoformat().replace("+00:00", "Z")
+        )
         info["daysLeft"] = max(0, math.ceil((exp - time.time()) / 86400))
     return info or None
 
@@ -48,7 +50,7 @@ def _real_email(value: object) -> str | None:
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="account.whoami", annotations=READ_ONLY)
+    @mcp.tool(name="account.whoami", title="Who Am I", annotations=READ_ONLY)
     def whoami() -> dict[str, Any]:
         """Who you are authenticated as: account email, plan (isPro / pioneer),
         this month's free-run quota, and — with a hosted token — the token name
@@ -96,7 +98,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             token_info.update(token_access_summary(claims))
             exp = claims.get("exp")
             if isinstance(exp, (int, float)) and not isinstance(exp, bool):
-                token_info["expiresAt"] = datetime.fromtimestamp(exp, timezone.utc).isoformat()
+                token_info["expiresAt"] = (
+                    datetime.fromtimestamp(exp, timezone.utc).isoformat().replace("+00:00", "Z")
+                )
                 token_info["daysLeft"] = max(0, math.ceil((exp - time.time()) / 86400))
         return {
             "userId": profile.get("userId"),

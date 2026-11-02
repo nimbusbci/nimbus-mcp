@@ -101,6 +101,7 @@ class NimbusClient:
             self._token_mode = False
             self.access_mode = "anonymous"
         self.config = config
+        headers["X-Nimbus-Client"] = f"nimbus-mcp/{_mcp_version()}"
         self._http = httpx.Client(
             base_url=config.api_url,
             headers=headers,
@@ -442,3 +443,9 @@ class NullClient:
 
     def close(self) -> None:
         pass
+
+
+def _mcp_version() -> str:
+    from . import __version__
+
+    return __version__

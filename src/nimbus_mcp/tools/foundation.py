@@ -20,17 +20,26 @@ from mcp.types import TextContent
 from ..access import MODE_HOSTED, TIER_PRO, account_tier, client_mode
 from ..client import McpToolError, NimbusClient
 from ._annotations import FIGURE_OUTPUT_SCHEMA, READ_ONLY
+from ._guards import DATA_SOURCES, PACK_MODES, choice, require_choice
+from ._hosted_files import LOCAL_SOURCE_HINT, refuse_local_path_on_gateway
 
-_SOURCES = ("dataset", "upload", "local")
+_SOURCES = DATA_SOURCES
+SourceArg = choice(DATA_SOURCES)
+ModeArg = choice(PACK_MODES)
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="foundation.compare", annotations=READ_ONLY, output_schema=FIGURE_OUTPUT_SCHEMA)
+    @mcp.tool(
+        name="foundation.compare",
+        title="Compare Foundation Backbones",
+        annotations=READ_ONLY,
+        output_schema=FIGURE_OUTPUT_SCHEMA,
+    )
     def compare(
-        source: str,
+        source: SourceArg,
         dataset: str | None = None,
         subject: str | None = None,
-        mode: str = "all",
+        mode: ModeArg = "all",
         path: str | None = None,
     ) -> ToolResult:
         """Run every available pretrained backbone on YOUR data and see which wins —
@@ -51,8 +60,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             mode: Pack split to load: training | evaluation | all (source=dataset).
             path: Upload path (source=upload) or absolute local path (source=local).
         """
-        if source not in _SOURCES:
-            raise McpToolError(f"source must be one of {_SOURCES}; got {source!r}.")
+        require_choice(source, _SOURCES, label="source")
+        require_choice(mode, PACK_MODES, label="mode")
+        if source == "local":
+            refuse_local_path_on_gateway(
+                client,
+                tool="foundation.compare",
+                hint=LOCAL_SOURCE_HINT,
+            )
         if client_mode(client) == MODE_HOSTED and account_tier(client) != TIER_PRO:
             # X10: hosted foundation.compare is a Pro feature. Local/desktop
             # backends run it on the user's own machine and are NOT gated.

@@ -12,7 +12,10 @@ from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
-from ._guards import safe_segment
+from ._guards import EXECUTION_STATUSES, choice, require_choice, safe_segment
+from ._time import iso_utc
+
+StatusArg = choice(EXECUTION_STATUSES, optional=True)
 
 _METRIC_KEYS = (
     "accuracyPct",
@@ -115,6 +118,9 @@ def _trim_summary(row: dict[str, Any]) -> dict[str, Any]:
         "chancePct",
     )
     trimmed = {k: row.get(k) for k in keys if row.get(k) is not None}
+    for ts in ("startedAt", "completedAt"):
+        if ts in trimmed:
+            trimmed[ts] = iso_utc(trimmed[ts])
     # Contract: ``dataset`` is the human-readable display label (e.g. "BCIIV2a");
     # ``datasetId`` is the catalog id (e.g. "BNCI2014_001") that other tools accept.
     # Both pass through unchanged.
@@ -259,8 +265,26 @@ def _find_duplicate_runs(
         return []
 
 
+def _rows_split(rows: Any, default: str) -> str:
+    """Split label for per-class rows: honour the backend's row label so OOF
+    cross-validation runs report ``oof`` rather than ``eval``/``train`` (E2E r6).
+
+    Held-out (``eval``) rows may only be relabelled ``oof``; fit-set rows may be
+    ``train`` or ``oof``. Anything else keeps ``default``.
+    """
+    allowed = {"eval": ("eval", "oof"), "train": ("train", "oof")}.get(default, (default,))
+    if isinstance(rows, list):
+        labels = {r.get("split") for r in rows if isinstance(r, dict)}
+        labels.discard(None)
+        if len(labels) == 1:
+            label = labels.pop()
+            if label in allowed:
+                return label
+    return default
+
+
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="execution.run", annotations=MUTATING)
+    @mcp.tool(name="execution.run", title="Run Pipeline", annotations=MUTATING)
     def run_pipeline(
         train_graph: dict[str, Any],
         name: str | None = None,
@@ -315,7 +339,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             )
         return result
 
-    @mcp.tool(name="execution.cancel", annotations=DESTRUCTIVE)
+    @mcp.tool(name="execution.cancel", title="Cancel Run", annotations=DESTRUCTIVE)
     def cancel_execution(execution_id: str) -> dict[str, Any]:
         """Cancel a running execution.
 
@@ -325,7 +349,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         exec_id = safe_segment(execution_id)
         return client.post("/api/cancel", json={"executionId": exec_id})
 
-    @mcp.tool(name="execution.delete", annotations=DESTRUCTIVE)
+    @mcp.tool(name="execution.delete", title="Delete Run", annotations=DESTRUCTIVE)
     def delete_execution(execution_id: str, confirm: bool = False) -> dict[str, Any]:
         """Permanently delete one of your finished runs (completed/failed/cancelled)
         with its results. Running runs must be cancelled first (409
@@ -345,7 +369,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         payload = client.delete(f"/api/executions/{exec_id}")
         return {"deleted": bool(payload.get("deleted", True)), "executionId": exec_id}
 
-    @mcp.tool(name="execution.get", annotations=READ_ONLY)
+    @mcp.tool(name="execution.get", title="Get Run", annotations=READ_ONLY)
     def get_execution(execution_id: str) -> dict[str, Any]:
         """Execution status summary (status: running/completed/failed/cancelled).
 
@@ -361,8 +385,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         payload = client.get(f"/api/executions/{exec_id}/summary")
         return _trim_summary(payload.get("summary", {}))
 
-    @mcp.tool(name="execution.list", annotations=READ_ONLY)
-    def list_executions(limit: int = 20, status: str | None = None) -> dict[str, Any]:
+    @mcp.tool(name="execution.list", title="List Runs", annotations=READ_ONLY)
+    def list_executions(limit: int = 20, status: StatusArg = None) -> dict[str, Any]:
         """Recent executions. Optional status filter (running/completed/failed/cancelled).
 
         Per-run fields: ``dataset`` is the human-readable display label
@@ -374,6 +398,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             limit: Maximum number of runs to return (default 20).
             status: Filter by run status: running/completed/failed/cancelled.
         """
+        require_choice(status, EXECUTION_STATUSES, label="status", optional=True)
         params: dict[str, Any] = {"limit": limit}
         if status is not None:
             params["status"] = status
@@ -381,7 +406,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         rows = [_trim_summary(row) for row in payload.get("executions", [])]
         return {"total": payload.get("total", len(rows)), "executions": rows}
 
-    @mcp.tool(name="execution.results", annotations=READ_ONLY)
+    @mcp.tool(name="execution.results", title="Run Results", annotations=READ_ONLY)
     def get_results(execution_id: str, full: bool = False) -> dict[str, Any]:
         """Metrics for a completed run. Trimmed by default (accuracy, kappa, ITR,
         confusion matrix, per-class); full=True returns the complete result object.
@@ -392,6 +417,14 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """
         exec_id = safe_segment(execution_id)
         payload = client.get(f"/api/result/{exec_id}")
+        if isinstance(payload, dict) and payload.get("ok") is False:
+            # Backend answers 202 {ok: false, status} while the run is still going.
+            raise McpToolError(
+                f"Execution {exec_id} is still {payload.get('status') or 'running'}; "
+                "results are not ready yet. Poll execution.status and retry when completed.",
+                status_code=202,
+                code="nimbus.execution.result_not_ready",
+            )
         result = payload.get("result", {})
         if full:
             return result
@@ -399,10 +432,10 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # Prefer held-out per-class rows; fall back to fit/train rows, labelled.
         eval_rows = result.get("evalPerClassAccuracy")
         if isinstance(eval_rows, list) and eval_rows:
-            per_class, per_class_split = eval_rows, "eval"
+            per_class, per_class_split = eval_rows, _rows_split(eval_rows, "eval")
         else:
             per_class = result.get("perClassAccuracy")
-            per_class_split = "train" if per_class else None
+            per_class_split = _rows_split(per_class, "train") if per_class else None
         trimmed: dict[str, Any] = {
             "executionId": exec_id,
             "metrics": {k: metrics[k] for k in _METRIC_KEYS if metrics.get(k) is not None},

@@ -6,23 +6,58 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from ..client import McpToolError, NimbusClient
+from ..client import NimbusClient
+from ..errors import local_tool_error
 from ._annotations import READ_ONLY
 from ._guards import safe_segment
 
+NODE_TYPE_NOT_FOUND = "nimbus.catalog.node_type_not_found"
+UNKNOWN_CATEGORY = "nimbus.catalog.unknown_category"
+
+#: Plural / common spellings agents try (round 7: the doc itself said "models").
+_CATEGORY_ALIASES = {
+    "models": "model",
+    "features": "feature",
+    "outputs": "output",
+    "inputs": "data",
+    "sources": "data",
+}
+
+
+def _resolve_category(category: str, valid: list[str]) -> str:
+    wanted = category.strip().lower()
+    if wanted in valid:
+        return wanted
+    alias = _CATEGORY_ALIASES.get(wanted)
+    if alias in valid:
+        return alias
+    if wanted.endswith("s") and wanted[:-1] in valid:
+        return wanted[:-1]
+    raise local_tool_error(
+        f"Unknown node category {category!r}. Valid categories: {', '.join(valid)}.",
+        code=UNKNOWN_CATEGORY,
+        status_code=400,
+    )
+
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
-    @mcp.tool(name="catalog.nodes", annotations=READ_ONLY)
+    @mcp.tool(name="catalog.nodes", title="List Pipeline Nodes", annotations=READ_ONLY)
     def list_nodes(category: str | None = None) -> dict[str, Any]:
         """List Nimbus pipeline node types (data, preprocessing, features, models...).
 
         Use catalog.node_schema(node_type) for one node's full config schema and ports.
 
         Args:
-            category: Optional filter — e.g. "data", "preprocessing", "features",
-                "models" (exact category ids from the unfiltered list).
+            category: Optional filter by category id — e.g. "data",
+                "preprocessing", "feature", "model" (singular ids; plurals such
+                as "models"/"features" are accepted). An unknown category is an
+                error that lists the valid ids.
         """
         payload = client.get("/api/node-types")
+        all_nodes = payload.get("nodeTypes", [])
+        if category is not None:
+            valid = sorted({str(n.get("category")) for n in all_nodes if n.get("category")})
+            category = _resolve_category(category, valid)
         nodes = [
             {
                 "id": n.get("id"),
@@ -36,12 +71,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                     {"name": p.get("name"), "type": p.get("type")} for p in n.get("outputs", [])
                 ],
             }
-            for n in payload.get("nodeTypes", [])
+            for n in all_nodes
             if category is None or n.get("category") == category
         ]
         return {"count": len(nodes), "nodes": nodes}
 
-    @mcp.tool(name="catalog.node_schema", annotations=READ_ONLY)
+    @mcp.tool(name="catalog.node_schema", title="Node Config Schema", annotations=READ_ONLY)
     def get_node_schema(node_type: str) -> dict[str, Any]:
         """Full config JSON schema + input/output ports for one node type.
 
@@ -57,12 +92,23 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                     "configSchema": node.get("configSchema", {}),
                     "ports": {"inputs": node.get("inputs", []), "outputs": node.get("outputs", [])},
                 }
-        raise McpToolError(f"Unknown node type '{node_type}'. Call catalog.nodes() for valid ids.")
+        raise local_tool_error(
+            f"Unknown node type '{node_type}'. Call catalog.nodes() for valid ids.",
+            code=NODE_TYPE_NOT_FOUND,
+            status_code=404,
+        )
 
-    @mcp.tool(name="catalog.templates", annotations=READ_ONLY)
-    def list_templates() -> dict[str, Any]:
+    @mcp.tool(name="catalog.templates", title="List Pipeline Templates", annotations=READ_ONLY)
+    def list_templates(dataset: str | None = None, paradigm: str | None = None) -> dict[str, Any]:
         """List built-in starter pipelines (MI/P300/SSVEP...).
-        catalog.template(id) returns the graph."""
+        catalog.template(id) returns the graph. Each row carries ``datasetId``
+        (catalog id, e.g. "BNCI2014_001" — the id catalog.leaderboard and
+        catalog.datasets use) and ``paradigm`` when the template loads a public dataset.
+
+        Args:
+            dataset: Only templates on this dataset id (e.g. "BNCI2014_001"); case-insensitive.
+            paradigm: Only templates with this paradigm (e.g. "motor_imagery", "p300", "ssvep").
+        """
         payload = client.get("/api/templates")
         templates = [
             {
@@ -71,12 +117,22 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "description": t.get("description", ""),
                 "category": t.get("category"),
                 "expectedAccuracy": t.get("expectedAccuracy"),
+                "datasetId": t.get("datasetId"),
+                "paradigm": t.get("paradigm"),
             }
             for t in payload.get("templates", [])
         ]
+
+        def _norm(v: Any) -> str:
+            return str(v or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+        if dataset:
+            templates = [t for t in templates if _norm(t["datasetId"]) == _norm(dataset)]
+        if paradigm:
+            templates = [t for t in templates if _norm(t["paradigm"]) == _norm(paradigm)]
         return {"count": len(templates), "templates": templates}
 
-    @mcp.tool(name="catalog.template", annotations=READ_ONLY)
+    @mcp.tool(name="catalog.template", title="Get Pipeline Template", annotations=READ_ONLY)
     def get_template(template_id: str) -> dict[str, Any]:
         """Full template incl. the 'train' execGraph needed by execution.run/pipeline.validate.
 
@@ -93,7 +149,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             "train": template.get("train"),
         }
 
-    @mcp.tool(name="catalog.datasets", annotations=READ_ONLY)
+    @mcp.tool(name="catalog.datasets", title="List Datasets", annotations=READ_ONLY)
     def list_datasets(only_on_disk: bool = True) -> dict[str, Any]:
         """Curated public EEG datasets (MOABB packs) available to pipelines.
 

@@ -185,17 +185,18 @@ async def test_inspect_file_hosted_403_local_forbidden_returns_guidance():
             },
         )
 
+    # E2E r9 N4: a tool error (isError) that still carries the guidance.
     async with Client(make_server(handler)) as c:
-        result = await c.call_tool("data.inspect_file", {"path": "/abs/eeg.edf"})
-    data = result.data
-    assert data["ok"] is False
-    assert "local backend" in data["message"]
-    actions = [opt["action"] for opt in data["options"]]
-    assert len(actions) == 2
-    assert "upload" in actions[0]
-    assert "local backend" in actions[1]
-    # Guidance shape mirrors setup mode: message + actionable options.
-    assert all("detail" in opt for opt in data["options"])
+        result = await c.call_tool(
+            "data.inspect_file", {"path": "/abs/eeg.edf"}, raise_on_error=False
+        )
+    assert result.is_error
+    text = result.content[0].text
+    assert "nimbus.data.describe_local_forbidden" in text
+    assert "correlationId" in text
+    assert "local backend" in text
+    assert "upload the file first (data.upload)" in text
+    assert "run against a local backend" in text
 
 
 async def test_inspect_file_relative_path_local_forbidden_still_raises():
