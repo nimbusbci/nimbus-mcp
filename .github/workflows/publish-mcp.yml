@@ -6,7 +6,10 @@ name: Publish to MCP Registry
 
 on:
   push:
-    tags: ["v*"]
+    # NimbusStudio release tags are named nimbus-mcp-vX.Y.Z (not bare vX.Y.Z) —
+    # a bare "v*" never matched, so registry publishes only ever ran via
+    # manual dispatch (0.14.21 shipped that way).
+    tags: ["nimbus-mcp-v*"]
   workflow_dispatch:
     inputs:
       version:
