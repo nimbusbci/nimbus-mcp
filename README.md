@@ -3,12 +3,13 @@
 <!-- mcp-name: io.github.nimbusbci/nimbus-mcp -->
 
 [![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=nimbus&config=eyJ1cmwiOiJodHRwczovL25pbWJ1cy1tY3AuZmx5LmRldi9tY3AifQ==)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_MCP_Server-0098FF?logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=nimbus-bci&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fnimbus-mcp.fly.dev%2Fmcp%22%7D)
 [![M8ven Verified](https://m8ven.ai/badge/mcp/nimbusbci-nimbus-mcp-1xjm62?variant=verified&v=01611e09ab598e1f20772a0fc6bd1b96)](https://m8ven.ai/mcp/nimbusbci-nimbus-mcp-1xjm62?s=readme)
 
 MCP server that lets AI agents (Claude Code, Cursor, Claude Desktop) build, validate,
 run, and analyze Nimbus BCI pipelines — upload their own EEG data, persist pipelines
-into studio projects, run multi-configuration experiment campaigns, watch live EEG
-sessions, and (explicitly confirmed) start live streaming — through your **local**
+into studio projects, run multi-configuration experiment campaigns on public
+MOABB/BNCI datasets, render plots, and export BIDS — through your **local**
 Nimbus backend **or the hosted deployment, with one `nimbus-mcp login`**.
 
 **Docs:** [docs.nimbusbci.com](https://docs.nimbusbci.com) · **Overview:** [nimbusbci.com/mcp](https://nimbusbci.com/mcp) · Jump to [Quickstart](#quickstart-hosted-recommended)
@@ -101,7 +102,6 @@ focused tools — and each covers a slice of what nimbus-mcp does end-to-end:
 | Bring-your-own model code (`python_model`) | ✅ local + cloud sandbox | — | — | — | — |
 | Benchmark leaderboard + server-side LOSO scoring | ✅ | — | — | — | — |
 | Agent-visible figures (PNG content blocks) | ✅ `plots.*` | — | — | ✅ | ✅ |
-| Live hardware sessions on a human | ✅ confirm-gated | ✅ | ✅ | — | — |
 | Modelless live band powers (focus/relaxation) | ✅ `stream.telemetry` | ✅ | ✅ | — | — |
 | Guided subject calibration | ✅ `calibration.*` | — | — | — | — |
 | Neurofeedback protocol sessions | ✅ `protocol.*` | — | — | — | — |
