@@ -61,6 +61,7 @@ jobs:
             --exclude '.github' \
             --exclude '.gitignore' \
             --exclude 'pkg.tar.gz' \
+            --exclude '.mcp.json' \
             /tmp/sdist/ ./
           # keep registry workflows + gitignore from this repo
 
