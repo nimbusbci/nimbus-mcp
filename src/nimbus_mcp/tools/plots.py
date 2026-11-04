@@ -12,7 +12,6 @@ leaderboard), not raw MNE file plumbing.
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +19,11 @@ from fastmcp import FastMCP
 from fastmcp.tools.base import ToolResult
 from fastmcp.utilities.types import Image
 
-from ..client import McpToolError, NimbusClient
+from ..client import NimbusClient
 from ..errors import local_tool_error
 from ._annotations import FIGURE_OUTPUT_SCHEMA, LOCAL_WRITE
+from ._figures import decode_png as _decode_png
+from ._figures import figure_info as _figure_info
 from ._guards import (
     DATA_SOURCES,
     INVALID_ARGUMENT,
@@ -41,17 +42,6 @@ BandArg = choice(_BANDS)
 TrackArg = choice(_TRACKS)
 SourceArg = choice(DATA_SOURCES)
 ModeArg = choice(PACK_MODES)
-
-
-def _decode_png(payload: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
-    """(png_bytes, meta) off the backend's PlotImagePayload."""
-    image_b64 = payload.get("image")
-    if not isinstance(image_b64, str) or not image_b64:
-        raise McpToolError("Backend returned no figure image (unexpected payload).")
-    try:
-        return base64.b64decode(image_b64, validate=True), dict(payload.get("meta") or {})
-    except (ValueError, TypeError) as e:
-        raise McpToolError(f"Backend figure payload was not valid base64 PNG: {e}") from e
 
 
 def _save_png(data: bytes, safe_stem: str, export_dir: Path) -> dict[str, Any]:
@@ -74,12 +64,7 @@ def _safe_stem(*parts: str) -> str:
 def register(mcp: FastMCP, client: NimbusClient) -> None:
     def _figure_response(payload: dict[str, Any], stem: str, save: bool) -> ToolResult:
         png, meta = _decode_png(payload)
-        info: dict[str, Any] = {
-            "ok": True,
-            "title": payload.get("title"),
-            "mimeType": payload.get("mimeType", "image/png"),
-            "meta": meta,
-        }
+        info: dict[str, Any] = _figure_info(payload, meta)
         if save and is_hosted_gateway(client):
             # Hosted: the gateway's disk is not the caller's; the PNG is already
             # returned inline as the image content block.

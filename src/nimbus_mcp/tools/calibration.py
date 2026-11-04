@@ -24,7 +24,7 @@ from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
 from ._annotations import MUTATING, READ_ONLY
-from ._guards import safe_segment
+from ._guards import confirm_refusal, safe_segment
 from .run import synth_layout
 
 PARADIGM_TEMPLATES = {
@@ -176,11 +176,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             serial_number: Device serial (some BLE stacks).
         """
         if not confirm:
-            return {
-                "started": False,
-                "message": "Refusing to start calibration: pass confirm=true "
+            return confirm_refusal(
+                "started",
+                "Refusing to start calibration: pass confirm=true "
                 "(a device session on a human). Call device.test first.",
-            }
+            )
         if trials_per_class is not None and trials_per_class < 5:
             raise McpToolError(
                 f"trials_per_class must be at least 5 (protocol minimum; got {trials_per_class})."

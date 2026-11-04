@@ -12,7 +12,7 @@ from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
-from ._guards import EXECUTION_STATUSES, choice, require_choice, safe_segment
+from ._guards import EXECUTION_STATUSES, choice, confirm_refusal, require_choice, safe_segment
 from ._time import iso_utc
 
 StatusArg = choice(EXECUTION_STATUSES, optional=True)
@@ -361,11 +361,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         """
         exec_id = safe_segment(execution_id)
         if not confirm:
-            return {
-                "deleted": False,
-                "message": "Refusing to delete a run: pass confirm=true to proceed. "
+            return confirm_refusal(
+                "deleted",
+                "Refusing to delete a run: pass confirm=true to proceed. "
                 "Check the id with execution.get first.",
-            }
+            )
         payload = client.delete(f"/api/executions/{exec_id}")
         return {"deleted": bool(payload.get("deleted", True)), "executionId": exec_id}
 

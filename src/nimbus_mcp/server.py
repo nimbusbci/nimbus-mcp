@@ -88,7 +88,8 @@ INSTRUCTIONS = """Nimbus Studio BCI tools. Typical flows:
    the Studio app shows cues; calibration.status polls; calibration.train turns the recording
    into the subject's own classifier.
 6b) Neurofeedback protocols: protocol.validate iterates the document (verdict data, no throw),
-   protocol.save(confirm=true) versions it, protocol.start_assignment(confirm=true) enrolls a
+   protocol.save(confirm=true) versions it, protocol.list shows saved protocols with versions,
+   protocol.start_assignment(confirm=true) enrolls a
    subject and prepares the deploy session (yoked sham arms need a donor recording upload);
    simulated-source sessions are free, live hardware requires Pro. Poll protocol.session_status,
    pause/resume/stop drive the session, protocol.export_stats gives paired pre/post stats +
@@ -496,10 +497,10 @@ def build_server(
         # The hosted gateway has no install identity and must not attach
         # per-install consent notices to other people's sessions; its
         # telemetry is operator opt-in (NIMBUS_MCP_GATEWAY_TELEMETRY=on).
+        from .tools._hosted_files import is_hosted_gateway
+
         product_telemetry = (
-            GatewayTelemetry()
-            if type(client).__name__ == "HeaderCredentialClient"
-            else get_telemetry()
+            GatewayTelemetry() if is_hosted_gateway(client) else get_telemetry()
         )
     mcp.add_middleware(ProductTelemetryMiddleware(product_telemetry, client))
     for module in (

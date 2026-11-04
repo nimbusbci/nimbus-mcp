@@ -48,7 +48,10 @@
 4. Verify: call `account.whoami`, then `catalog.datasets`. You should see the public MOABB/BNCI
    datasets. If you get `No Nimbus backend is running...`, the server has no credential and no
    local backend: have the user run `uvx nimbus-mcp login` (step 2) or start the Nimbus Studio
-   desktop app, then restart the server and retry. `uvx nimbus-mcp status` shows what it found.
+   desktop app, then restart the server and retry. If you get `Login required: the hosted Nimbus
+   API ... rejected this request (HTTP 401)` (the config sets `NIMBUS_API_URL` to the hosted API
+   but no credential is present), the fix is the same login: run `uvx nimbus-mcp login` or set
+   `NIMBUS_TOKEN`, then restart the server and retry. `uvx nimbus-mcp status` shows what it found.
 5. Safety: live-streaming and hardware tools act on a real person and device. Do not start them
    unless the user explicitly asks.
 

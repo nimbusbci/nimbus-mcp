@@ -22,6 +22,9 @@ __all__ = [
     "LOCAL_BACKEND_UNREACHABLE",
     "SETUP_OPTIONS",
     "desktop_app_not_running_guidance",
+    "HOSTED_LOGIN_REQUIRED",
+    "hosted_login_guidance",
+    "is_loopback_api_url",
     "SETUP_MESSAGE",
     "SetupRequired",
     "local_mode_guidance",
@@ -35,6 +38,26 @@ DESKTOP_DOWNLOAD_WINDOWS = "https://nimbus-desktop-releases.fly.storage.tigris.d
 HOSTED_GATEWAY_URL = "https://nimbus-mcp.fly.dev/mcp"
 # Stable machine-readable reason for "nothing answered on the local backend".
 LOCAL_BACKEND_UNREACHABLE = "local_backend_unreachable"
+# Stable reason for "an anonymous call reached the HOSTED API and was rejected".
+HOSTED_LOGIN_REQUIRED = "hosted_login_required"
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def is_loopback_api_url(api_url: str | None) -> bool:
+    """True when ``api_url`` points at this machine (a local backend).
+
+    Unknown/empty URLs count as local so the pre-existing local guidance is
+    kept when we cannot tell."""
+    if not api_url:
+        return True
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(api_url).hostname or "").lower()
+    except ValueError:
+        return True
+    return host in _LOOPBACK_HOSTS or host == ""
 
 SETUP_MESSAGE = (
     "No Nimbus credential is configured, so this tool cannot run yet. Pick one "
@@ -167,6 +190,43 @@ def local_mode_guidance(status: int | None = 401, api_url: str | None = None) ->
     for o in login:
         o["detail"] = "Only for cloud features (not needed locally). " + o["detail"]
     guidance["options"] = local_first + login
+    return guidance
+
+
+def hosted_login_guidance(status: int | None, api_url: str) -> dict[str, Any]:
+    """An anonymous call reached the HOSTED Nimbus API and was rejected.
+
+    Unlike :func:`local_mode_guidance` the fix here IS a login: the request
+    went to ``api_url`` (not a local backend), which needs a hosted token.
+    Returns ``loginRequired: true`` alongside the setup-mode keys."""
+    code = f" (HTTP {status})" if status is not None else ""
+    guidance = setup_guidance(
+        message=(
+            f"Login required: the hosted Nimbus API at {api_url} rejected this "
+            f"request{code} because no Nimbus credential is configured. Run "
+            "`nimbus-mcp login` in a terminal and approve in the browser, or set "
+            "NIMBUS_TOKEN to an API key minted in Nimbus Studio → Account → API "
+            f"tokens, or point your MCP client at the hosted gateway "
+            f"{HOSTED_GATEWAY_URL}. Then restart the server and retry. (For "
+            "fully local use instead, remove NIMBUS_API_URL and run the Nimbus "
+            "Studio desktop app.)"
+        ),
+        loginRequired=True,
+        reason=HOSTED_LOGIN_REQUIRED,
+        apiUrl=api_url,
+    )
+    if status is not None:
+        guidance["httpStatus"] = status
+    options = guidance["options"]
+    login = [o for o in options if o["action"] == "nimbus-mcp login"]
+    rest = [o for o in options if o["action"] != "nimbus-mcp login"]
+    gateway = {
+        "action": "use the hosted gateway",
+        "detail": f"Point your MCP client at {HOSTED_GATEWAY_URL} (OAuth sign-in "
+        "on first use, or an `Authorization: Bearer <API key>` header).",
+        "url": HOSTED_GATEWAY_URL,
+    }
+    guidance["options"] = login + [gateway] + rest
     return guidance
 
 

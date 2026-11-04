@@ -14,6 +14,8 @@ from .errors import McpToolError
 from .setup_mode import (
     SetupRequired,
     desktop_app_not_running_guidance,
+    hosted_login_guidance,
+    is_loopback_api_url,
     local_mode_guidance,
     setup_guidance,
     token_rejected_guidance,
@@ -170,7 +172,11 @@ class NimbusClient:
         """
         if getattr(self, "access_mode", None) == "anonymous":
             # Anonymous local call rejected: the fix is a local identity
-            # (desktop app / dev key), NOT a Studio login.
+            # (desktop app / dev key), NOT a Studio login -- unless the
+            # request went to the HOSTED API (NIMBUS_API_URL set to a remote
+            # host), where a login is exactly the fix.
+            if not is_loopback_api_url(self.config.api_url):
+                return SetupRequired(hosted_login_guidance(status, self.config.api_url))
             return SetupRequired(local_mode_guidance(status))
         if self._token_mode:
             return SetupRequired(token_rejected_guidance(self.config.nimbus_token, status))

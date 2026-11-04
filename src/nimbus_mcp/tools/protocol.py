@@ -43,7 +43,7 @@ from fastmcp import FastMCP
 
 from ..client import McpToolError, NimbusClient
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
-from ._guards import safe_segment
+from ._guards import confirm_refusal, safe_segment
 from .run import synth_layout
 
 # The built-in protocol graph head: the focus-meter deploy template's
@@ -241,11 +241,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             confirm: MUST be true to write.
         """
         if not confirm:
-            return {
-                "saved": False,
-                "message": "Refusing to save: pass confirm=true (this appends the next "
+            return confirm_refusal(
+                "saved",
+                "Refusing to save: pass confirm=true (this appends the next "
                 "protocol version). Call protocol.validate first while iterating.",
-            }
+            )
         payload = client.post("/api/protocols", json={"spec": spec})
         return {
             "saved": True,
@@ -303,12 +303,12 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 carries a protocol_session node; default clones the template.
         """
         if not confirm:
-            return {
-                "started": False,
-                "message": "Refusing to start an assignment session: pass confirm=true "
+            return confirm_refusal(
+                "started",
+                "Refusing to start an assignment session: pass confirm=true "
                 "(a neurofeedback session on a human). Validate the protocol and the "
                 "donor first (protocol.validate).",
-            }
+            )
         if arm not in ("active", "sham"):
             raise McpToolError(f"arm must be 'active' or 'sham' (got {arm!r}).")
         pid = safe_segment(protocol_id, label="protocol id")

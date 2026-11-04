@@ -494,6 +494,7 @@ Live: `device.list`, `device.test`, `stream.start` (needs `confirm=true`),
 Calibration: `calibration.start` (needs `confirm=true`), `calibration.status`,
 `calibration.pause`, `calibration.resume`, `calibration.train`
 Neurofeedback protocols: `protocol.validate`/`protocol.save` (versioned specs),
+`protocol.list` (saved protocols with their versions),
 `protocol.start_assignment` (confirm-gated; simulated sources free, live hardware Pro),
 `protocol.session_status`/`pause`/`resume`/`stop`, `protocol.export_stats`
 (paired pre/post stats + figure + CSV). Since 0.14.12 neither `protocol.save`

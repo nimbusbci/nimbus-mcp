@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 
-from ..client import McpToolError, NimbusClient
+from ..client import NimbusClient
 from ..errors import local_tool_error
 from ._annotations import DESTRUCTIVE, MUTATING
-from ._guards import safe_upload_path
+from ._guards import (
+    SAMPLING_RATE_REQUIRED_CODE,
+    confirm_refusal,
+    safe_upload_path,
+    validate_sampling_rate,
+)
 from ._hosted_files import refuse_local_path_on_gateway
 
 _USAGE = (
@@ -66,20 +70,18 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         # samplingRate/format are mandatory, not snake_case.
         config: dict[str, Any] = {}
         if sampling_rate is not None:
-            if not math.isfinite(sampling_rate) or sampling_rate <= 0:
-                raise McpToolError(
-                    f"Invalid sampling_rate '{sampling_rate}': provide a positive "
-                    "frequency in Hz (e.g. 250.0)."
-                )
+            validate_sampling_rate(sampling_rate)
             config["samplingRate"] = sampling_rate
         if format is not None:
             config["format"] = format
-        fmt = (format or path.suffix.lstrip(".")).lower()
+        fmt = (format or path.suffix.lstrip(".")).lower() or path.suffix.lower()
         if fmt in {"csv", "tsv", "txt"} or path.suffix.lower() in _HEADERLESS_EXTS:
             if sampling_rate is None:
-                raise McpToolError(
+                raise local_tool_error(
                     "sampling_rate is required for CSV/TSV/TXT uploads (Hz, e.g. 250.0). "
-                    "The backend no longer assumes 250 Hz."
+                    "The backend no longer assumes 250 Hz.",
+                    code=SAMPLING_RATE_REQUIRED_CODE,
+                    status_code=400,
                 )
         if config:
             fields["config"] = json.dumps(config)
@@ -104,11 +106,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             confirm: MUST be true to delete — the explicit user go-ahead.
         """
         if not confirm:
-            return {
-                "deleted": False,
-                "message": "Refusing to delete an upload: pass confirm=true to proceed. "
+            return confirm_refusal(
+                "deleted",
+                "Refusing to delete an upload: pass confirm=true to proceed. "
                 "Use the path returned by data.upload.",
-            }
+            )
         upload_path = safe_upload_path(path)
         payload = client.delete("/api/uploads", params={"path": upload_path})
         return {

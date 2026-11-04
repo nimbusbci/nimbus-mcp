@@ -9,7 +9,6 @@ what the numbers were computed from.
 
 from __future__ import annotations
 
-import math
 import os
 from typing import Any
 
@@ -18,7 +17,13 @@ from fastmcp import FastMCP
 from ..client import McpToolError, NimbusClient
 from ..errors import local_tool_error
 from ._annotations import READ_ONLY
-from ._guards import PACK_MODES, choice, require_choice
+from ._guards import (
+    PACK_MODES,
+    SAMPLING_RATE_REQUIRED_CODE,
+    choice,
+    require_choice,
+    validate_sampling_rate,
+)
 from ._hosted_files import LOCAL_PATH_UNSUPPORTED, is_hosted_gateway
 
 # Backend error code for "local paths are not trusted on this deployment"
@@ -27,8 +32,6 @@ _LOCAL_FORBIDDEN_CODE = "nimbus.data.describe_local_forbidden"
 
 # Plain-text formats carry no sampling rate; the backend refuses to guess.
 _RATELESS_EXTENSIONS = (".csv", ".tsv", ".txt")
-SAMPLING_RATE_REQUIRED_CODE = "nimbus.mcp.sampling_rate_required"
-SAMPLING_RATE_INVALID_CODE = "nimbus.mcp.sampling_rate_invalid"
 
 _HOSTED_LOCAL_MESSAGE = (
     "This Nimbus backend is hosted, so it does not open local filesystem "
@@ -151,13 +154,7 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             raise _hosted_local_error(LOCAL_PATH_UNSUPPORTED, 400)
         params: dict[str, Any] = {"source": source, "path": resolved}
         if sampling_rate is not None:
-            if not math.isfinite(sampling_rate) or sampling_rate <= 0:
-                raise local_tool_error(
-                    f"Invalid sampling_rate '{sampling_rate}': provide a positive "
-                    "number of Hz (e.g. 250.0).",
-                    code=SAMPLING_RATE_INVALID_CODE,
-                    status_code=400,
-                )
+            validate_sampling_rate(sampling_rate)
             params["samplingRate"] = sampling_rate
         elif resolved.strip().lower().endswith(_RATELESS_EXTENSIONS):
             raise local_tool_error(

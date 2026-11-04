@@ -3,7 +3,7 @@
   "name": "io.github.nimbusbci/nimbus-mcp",
   "title": "Nimbus BCI",
   "description": "BCI/EEG toolkit: public MOABB/BNCI datasets, pipeline build/validate, hosted training, BIDS export.",
-  "version": "0.14.20",
+  "version": "0.14.21",
   "repository": {
     "url": "https://github.com/nimbusbci/nimbus-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "nimbus-mcp",
-      "version": "0.14.20",
+      "version": "0.14.21",
       "transport": {
         "type": "stdio"
       },

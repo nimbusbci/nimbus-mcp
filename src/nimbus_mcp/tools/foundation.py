@@ -8,7 +8,6 @@ measured on other people's data.
 
 from __future__ import annotations
 
-import base64
 import json
 from typing import Any
 
@@ -20,6 +19,7 @@ from mcp.types import TextContent
 from ..access import MODE_HOSTED, TIER_PRO, account_tier, client_mode
 from ..client import McpToolError, NimbusClient
 from ._annotations import FIGURE_OUTPUT_SCHEMA, READ_ONLY
+from ._figures import decode_png, figure_info
 from ._guards import DATA_SOURCES, PACK_MODES, choice, require_choice
 from ._hosted_files import LOCAL_SOURCE_HINT, refuse_local_path_on_gateway
 
@@ -90,20 +90,8 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 "path": path,
             },
         )
-        image_b64 = payload.get("image")
-        if not isinstance(image_b64, str) or not image_b64:
-            raise McpToolError("Backend returned no figure image (unexpected payload).")
-        try:
-            png = base64.b64decode(image_b64, validate=True)
-        except (ValueError, TypeError) as e:
-            raise McpToolError(f"Backend figure payload was not valid base64 PNG: {e}") from e
-        meta = dict(payload.get("meta") or {})
-        info: dict[str, Any] = {
-            "ok": True,
-            "title": payload.get("title"),
-            "mimeType": payload.get("mimeType", "image/png"),
-            "meta": meta,
-        }
+        png, meta = decode_png(payload)
+        info: dict[str, Any] = figure_info(payload, meta)
         # Image + machine-readable text (clients that ignore structuredContent
         # still get meta.results as JSON — #471) + structuredContent sidecar.
         results_text = json.dumps(

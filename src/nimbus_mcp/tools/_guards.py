@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unicodedata
 from pathlib import Path
 from typing import Any
@@ -95,3 +96,32 @@ def require_choice(
         raise local_tool_error(
             f"{label} must be one of {values}; got {value!r}.", code=INVALID_ARGUMENT
         )
+
+
+#: Sampling-rate validation taxonomy (E2E r9): one coded error envelope for
+#: the same user mistake in every tool that takes a Hz value.
+SAMPLING_RATE_REQUIRED_CODE = "nimbus.mcp.sampling_rate_required"
+SAMPLING_RATE_INVALID_CODE = "nimbus.mcp.sampling_rate_invalid"
+
+
+def validate_sampling_rate(value: float) -> float:
+    """Reject non-positive/non-finite Hz values with the coded error taxonomy."""
+    if not math.isfinite(value) or value <= 0:
+        raise local_tool_error(
+            f"Invalid sampling_rate '{value}': provide a positive number of Hz "
+            "(e.g. 250.0).",
+            code=SAMPLING_RATE_INVALID_CODE,
+            status_code=400,
+        )
+    return value
+
+
+def confirm_refusal(key: str, message: str) -> dict[str, Any]:
+    """Confirm-gate refusal envelope for destructive/mutating tools.
+
+    Call sites keep their user-facing copy (the *why* differs per tool) but
+    share the ``{key: False, message}`` shape, so evolving the envelope —
+    e.g. adding a stable ``code`` for telemetry keying — lands here once
+    instead of in eight tool bodies.
+    """
+    return {key: False, "message": message}

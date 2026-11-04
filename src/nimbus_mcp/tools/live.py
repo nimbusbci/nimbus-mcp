@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from ..client import McpToolError, NimbusClient
 from ..setup_mode import SetupRequired
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
-from ._guards import safe_segment
+from ._guards import confirm_refusal, safe_segment
 
 _DEVICE_FIELDS = (
     "connection_type",
@@ -164,11 +164,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
                 without a status poll (default 900; 0 disables).
         """
         if not confirm:
-            return {
-                "started": False,
-                "message": "Refusing to start a live session: pass confirm=true to proceed. "
+            return confirm_refusal(
+                "started",
+                "Refusing to start a live session: pass confirm=true to proceed. "
                 "Call device.test(device_type=...) first to check the connection.",
-            }
+            )
         # After the confirm check (so the refusal stays zero-HTTP) and before any request:
         # session_id is interpolated into request bodies downstream.
         if session_id is not None:

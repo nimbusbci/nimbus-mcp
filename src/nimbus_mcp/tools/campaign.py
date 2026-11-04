@@ -39,7 +39,7 @@ from ..client import McpToolError, NimbusClient
 from ..errors import local_tool_error
 from ..setup_mode import SetupRequired
 from ._annotations import DESTRUCTIVE, MUTATING, READ_ONLY
-from ._guards import safe_segment
+from ._guards import confirm_refusal, safe_segment
 from .run import _METRIC_KEYS, synth_layout
 
 logger = logging.getLogger(__name__)
@@ -908,13 +908,26 @@ def _experiment_worker(
                         run.status = "failed"
                         run.error = f"experiment aborted: {err}"
         finally:
+            # Server write BEFORE the local record turns terminal (portability
+            # gap #518): another entry point reads the server copy when its
+            # local state is fresh, and the start-persisted snapshot carries no
+            # executionIds (so its fallback refresh cannot self-heal) — a
+            # terminal local record with a 'running' server copy is exactly
+            # the window where experiment.get from another machine lies. The
+            # build-then-revert below happens under one lock hold, invisible
+            # to readers; if the server write fails (best-effort by design),
+            # the re-flip after it still makes the local record terminal.
             with EXPERIMENTS.lock:
                 state.aggregates = _compute_aggregates(state.runs)
                 state.status = (
                     "failed" if all(run.status == "failed" for run in state.runs) else "completed"
                 )
-            EXPERIMENTS.persist(fingerprint, state)
-            _persist_experiment_to_server(client, state.payload())
+                terminal_payload = state.payload()
+                state.status = "running"
+            _persist_experiment_to_server(client, terminal_payload)
+            with EXPERIMENTS.lock:
+                state.status = str(terminal_payload["status"])
+                EXPERIMENTS.persist(fingerprint, state)
 
 
 def register(mcp: FastMCP, client: NimbusClient) -> None:
@@ -1074,10 +1087,9 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
         client.ensure_ready()
         exp_id = safe_segment(experiment_id, label="experiment id")
         if not confirm:
-            return {
-                "deleted": False,
-                "message": "Refusing to delete an experiment: pass confirm=true to proceed.",
-            }
+            return confirm_refusal(
+                "deleted", "Refusing to delete an experiment: pass confirm=true to proceed."
+            )
         local = EXPERIMENTS.remove(client.credential_fingerprint(), exp_id)
         if local == "running":
             raise local_tool_error(

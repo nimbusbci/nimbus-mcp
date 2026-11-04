@@ -9,7 +9,7 @@ from fastmcp import FastMCP
 from ..client import NimbusClient
 from ..errors import local_tool_error
 from ._annotations import DESTRUCTIVE, IDEMPOTENT_MUTATING, MUTATING, READ_ONLY
-from ._guards import safe_segment
+from ._guards import confirm_refusal, safe_segment
 from ._time import iso_utc
 from .run import synth_layout
 
@@ -147,11 +147,11 @@ def register(mcp: FastMCP, client: NimbusClient) -> None:
             confirm: MUST be true to delete — the explicit user go-ahead.
         """
         if not confirm:
-            return {
-                "deleted": False,
-                "message": "Refusing to delete a project: pass confirm=true to proceed. "
+            return confirm_refusal(
+                "deleted",
+                "Refusing to delete a project: pass confirm=true to proceed. "
                 "Call project.list to check the project id first.",
-            }
+            )
         pid = safe_segment(project_id, label="project id")
         payload = client.delete(f"/api/projects/{pid}")
         return {
